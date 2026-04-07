@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  IMPORTANT: this file MUST stay in sync with infra/hazelcast/hazelcast-client.xml.
+  Phase 2c expedient: the persistence library loads this file from the classpath,
+  so it must live inside this module's resources, but it must also live in
+  infra/hazelcast/ so other future Hazelcast clients (simplified-bot, simplified-server)
+  can find a single canonical reference.
+
+  Phase 4+ should consolidate to a shared resource (gradle resources copy task or
+  symlink). For now, any edit to one file MUST be applied to the other.
+-->
+<hazelcast-client xmlns="http://www.hazelcast.com/schema/client-config"
+                  xsi:schemaLocation="http://www.hazelcast.com/schema/client-config
+                  http://www.hazelcast.com/schema/client-config/hazelcast-client-config-5.6.xsd"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+    <cluster-name>skyblock</cluster-name>
+
+    <network>
+        <cluster-members>
+            <address>hazelcast:5701</address>
+        </cluster-members>
+        <connection-timeout>5000</connection-timeout>
+        <cluster-routing mode="ALL_MEMBERS"/>
+    </network>
+
+    <connection-strategy async-start="false" reconnect-mode="ON">
+        <connection-retry>
+            <initial-backoff-millis>1000</initial-backoff-millis>
+            <max-backoff-millis>15000</max-backoff-millis>
+            <multiplier>2</multiplier>
+            <cluster-connect-timeout-millis>30000</cluster-connect-timeout-millis>
+            <jitter>0.2</jitter>
+        </connection-retry>
+    </connection-strategy>
+
+</hazelcast-client>
