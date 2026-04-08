@@ -7,6 +7,7 @@ import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
 import dev.sbs.simplifieddata.config.GitHubConfig;
+import dev.simplified.client.exception.NotModifiedException;
 import dev.simplified.client.response.Response;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
@@ -31,6 +32,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Optional;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Scheduled watchdog that detects changes in the {@code skyblock-data} GitHub repository
@@ -103,6 +105,17 @@ public class AssetPoller {
     private final boolean pollEnabled;
 
     /**
+     * Guards concurrent {@link #doPoll(String)} invocations so the startup poll triggered by
+     * {@link ApplicationReadyEvent} on the main thread cannot race the first
+     * {@link Scheduled} fire on the scheduling pool. On first boot both paths fire at roughly
+     * the same instant, both read an empty {@link ExternalAssetState}, both attempt to INSERT
+     * a new row keyed on {@code sourceId}, and one of them trips the primary-key constraint.
+     * {@link ReentrantLock#tryLock()} lets the second caller skip its cycle cleanly with a
+     * single {@code DEBUG} log line instead of emitting a confusing {@code ERROR}.
+     */
+    private final @NotNull ReentrantLock pollLock = new ReentrantLock();
+
+    /**
      * Constructs the poller with the injected asset-state session, GitHub contract, last-response
      * accessor, and configuration properties.
      *
@@ -166,12 +179,21 @@ public class AssetPoller {
 
     /**
      * Executes one full poll cycle. Never throws - every failure path logs and returns so
-     * the next scheduled fire can retry cleanly.
+     * the next scheduled fire can retry cleanly. Guarded by {@link #pollLock} so the startup
+     * and scheduled entry points cannot run in parallel on first boot.
      *
      * @param cause a short tag identifying the trigger ({@code "startup"} or {@code "scheduled"})
      *              purely for log correlation
      */
     private void doPoll(@NotNull String cause) {
+        if (!this.pollLock.tryLock()) {
+            log.debug(
+                "AssetPoller source='{}' - poll already in progress (cause={}), skipping this fire",
+                this.sourceId, cause
+            );
+            return;
+        }
+
         try {
             ExternalAssetState currentState = this.loadCurrentState();
             String storedEtag = currentState.getEtag().orElse(null);
@@ -225,6 +247,8 @@ public class AssetPoller {
             log.error("AssetPoller source='{}' - state write failed: {}", this.sourceId, ex.getMessage(), ex);
         } catch (RuntimeException ex) {
             log.error("AssetPoller source='{}' - unexpected poll failure: {}", this.sourceId, ex.getMessage(), ex);
+        } finally {
+            this.pollLock.unlock();
         }
     }
 
@@ -260,10 +284,18 @@ public class AssetPoller {
      * @return a {@link CommitProbe} on 200, or empty on 304
      */
     private @NotNull Optional<CommitProbe> probeLatestCommit(@Nullable String storedEtag) {
-        if (storedEtag == null) {
-            this.contract.getLatestMasterCommit();
-        } else {
-            ETagContext.callWithEtag(storedEtag, this.contract::getLatestMasterCommit);
+        // Framework's InternalErrorDecoder short-circuits 3xx responses into a typed
+        // NotModifiedException so callers can recognise the cache-hit signal without
+        // inspecting status codes. Treat this as the successful "no change" outcome and
+        // return empty. Any other ApiException propagates to the doPoll() catch block.
+        try {
+            if (storedEtag == null) {
+                this.contract.getLatestMasterCommit();
+            } else {
+                ETagContext.callWithEtag(storedEtag, this.contract::getLatestMasterCommit);
+            }
+        } catch (NotModifiedException ex) {
+            return Optional.empty();
         }
 
         Optional<Response<?>> lastResponse = this.lastResponseAccessor.getLastResponse();
@@ -272,10 +304,6 @@ public class AssetPoller {
             throw new IllegalStateException("Framework did not cache a response for getLatestMasterCommit");
 
         Response<?> response = lastResponse.get();
-        int statusCode = response.getStatus().getCode();
-
-        if (statusCode == 304)
-            return Optional.empty();
 
         String etag = response.getHeaders()
             .getOptional(ETAG_HEADER)
@@ -306,8 +334,9 @@ public class AssetPoller {
      * @return the snapshot carrying both views of the manifest
      */
     private @NotNull ManifestSnapshot fetchManifestSnapshot() {
-        String rawJson = this.contract.getFileContent(MANIFEST_PATH);
-        String contentSha = sha256Hex(rawJson.getBytes(StandardCharsets.UTF_8));
+        byte[] bytes = this.contract.getFileContent(MANIFEST_PATH);
+        String contentSha = sha256Hex(bytes);
+        String rawJson = new String(bytes, StandardCharsets.UTF_8);
         ManifestIndex manifest = this.gson.fromJson(rawJson, ManifestIndex.class);
 
         if (manifest == null)

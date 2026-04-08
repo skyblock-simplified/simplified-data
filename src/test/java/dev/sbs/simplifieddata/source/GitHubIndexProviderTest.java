@@ -178,8 +178,8 @@ class GitHubIndexProviderTest {
         }
 
         @Override
-        public @NotNull String getFileContent(@NotNull String path) {
-            return this.fileContent.apply(path);
+        public byte @NotNull [] getFileContent(@NotNull String path) {
+            return this.fileContent.apply(path).getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
 
     }

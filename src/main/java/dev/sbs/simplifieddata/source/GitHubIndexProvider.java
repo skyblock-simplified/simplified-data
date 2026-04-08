@@ -50,7 +50,8 @@ public final class GitHubIndexProvider implements IndexProvider {
     @Override
     public @NotNull ManifestIndex loadIndex() throws JpaException {
         try {
-            String rawJson = this.contract.getFileContent(MANIFEST_PATH);
+            byte[] bytes = this.contract.getFileContent(MANIFEST_PATH);
+            String rawJson = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
             ManifestIndex manifest = this.gson.fromJson(rawJson, ManifestIndex.class);
 
             if (manifest == null)

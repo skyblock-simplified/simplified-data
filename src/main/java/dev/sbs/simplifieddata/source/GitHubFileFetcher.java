@@ -38,8 +38,9 @@ public final class GitHubFileFetcher implements FileFetcher {
     @Override
     public @NotNull String fetchFile(@NotNull String path) throws JpaException {
         try {
-            String body = this.contract.getFileContent(path);
-            log.debug("Fetched file '{}' from source '{}' ({} bytes)", path, this.sourceId, body.length());
+            byte[] bytes = this.contract.getFileContent(path);
+            String body = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            log.debug("Fetched file '{}' from source '{}' ({} bytes)", path, this.sourceId, bytes.length);
             return body;
         } catch (SkyBlockDataException ex) {
             throw new JpaException(

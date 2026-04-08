@@ -6,6 +6,7 @@ import dev.sbs.simplifieddata.client.ETagContext;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
+import dev.simplified.client.exception.NotModifiedException;
 import dev.simplified.client.response.HttpStatus;
 import dev.simplified.client.response.NetworkDetails;
 import dev.simplified.client.response.Response;
@@ -198,10 +199,11 @@ class AssetPollerTest {
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
 
-        // Second cycle: simulate a 304 by returning a Response with status 304 and no body.
-        this.accessor.next = response(304, Map.of(), Concurrent.<GitHubCommit>newList());
-        // The contract's commit list does not get inspected on a 304 path; mark it null to
-        // prove the poller never reads it.
+        // Second cycle: simulate the framework's 304 short-circuit by having the stub throw
+        // a NotModifiedException directly. The framework's InternalErrorDecoder produces this
+        // exception type when GitHub returns 304 to a conditional request, and AssetPoller's
+        // probeLatestCommit catches it as the "no change" signal.
+        this.contract.commitException = buildNotModified();
         this.contract.commitList = null;
         poller.scheduledPoll();
 
@@ -352,12 +354,30 @@ class AssetPollerTest {
         return new SkyBlockDataException("getLatestMasterCommit", feignResponse);
     }
 
+    private static @NotNull NotModifiedException buildNotModified() {
+        feign.Request feignRequest = feign.Request.create(
+            feign.Request.HttpMethod.GET,
+            "https://api.github.com/repos/skyblock-simplified/skyblock-data/commits?sha=master",
+            Map.of(),
+            feign.Request.Body.empty(),
+            new feign.RequestTemplate()
+        );
+        feign.Response feignResponse = feign.Response.builder()
+            .status(304)
+            .reason("Not Modified")
+            .request(feignRequest)
+            .headers(Map.of())
+            .body(new byte[0])
+            .build();
+        return new NotModifiedException("getLatestMasterCommit", feignResponse);
+    }
+
     /** Hand-rolled contract stub. */
     private static final class StubContract implements SkyBlockDataContract {
 
         private final @NotNull Map<String, String> fileContents = new HashMap<>();
         private @Nullable ConcurrentList<GitHubCommit> commitList;
-        private @Nullable SkyBlockDataException commitException;
+        private @Nullable RuntimeException commitException;
 
         @Override
         public @NotNull ConcurrentList<GitHubCommit> getLatestMasterCommit() throws SkyBlockDataException {
@@ -371,13 +391,13 @@ class AssetPollerTest {
         }
 
         @Override
-        public @NotNull String getFileContent(@NotNull String path) throws SkyBlockDataException {
+        public byte @NotNull [] getFileContent(@NotNull String path) throws SkyBlockDataException {
             String body = this.fileContents.get(path);
 
             if (body == null)
                 throw new IllegalStateException("StubContract.fileContents missing entry for path '" + path + "'");
 
-            return body;
+            return body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
 
     }

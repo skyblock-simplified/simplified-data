@@ -62,18 +62,25 @@ public interface SkyBlockDataContract extends Contract {
      * Fetches the raw file body at the given path on the {@code master} branch of
      * {@code skyblock-simplified/skyblock-data}.
      *
-     * <p>The response body is the literal file bytes decoded as UTF-8, not a JSON envelope
-     * with base64 content. This path works for every file in the {@code skyblock-data} repo
-     * (the largest is {@code data/v1/items/items.json} at ~6.78 MB, comfortably below the
-     * GitHub-documented 100 MB ceiling for the Contents API raw media type).
+     * <p>Returns the literal file bytes, not a JSON envelope with base64 content. This path
+     * works for every file in the {@code skyblock-data} repo (the largest is
+     * {@code data/v1/items/items.json} at ~6.78 MB, comfortably below the GitHub-documented
+     * 100 MB ceiling for the Contents API raw media type).
+     *
+     * <p>The return type is {@code byte[]} (not {@code String}) because the framework's
+     * {@code InternalResponseDecoder} attempts to parse the raw body as JSON when the target
+     * type is {@code String}, producing {@code null} for JSON-object bodies and crashing at
+     * {@code Response$Impl.<init>} with a {@code body is marked non-null but is null} error.
+     * Routing through the binary-body decoder path avoids this entirely; callers decode the
+     * bytes to a UTF-8 string via {@link java.nio.charset.StandardCharsets#UTF_8} in one line.
      *
      * @param path the repo-root-relative file path from a
      *             {@link dev.simplified.persistence.source.ManifestIndex.Entry},
      *             e.g. {@code "data/v1/items/items.json"}
-     * @return the raw file body as a UTF-8 string
+     * @return the raw file body bytes
      * @throws SkyBlockDataException on any non-2xx status
      */
     @RequestLine("GET /repos/skyblock-simplified/skyblock-data/contents/{path}?ref=master")
-    @NotNull String getFileContent(@Param("path") @NotNull String path) throws SkyBlockDataException;
+    byte @NotNull [] getFileContent(@Param("path") @NotNull String path) throws SkyBlockDataException;
 
 }
