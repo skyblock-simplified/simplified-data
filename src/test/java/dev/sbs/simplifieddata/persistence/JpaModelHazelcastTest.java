@@ -8,7 +8,6 @@ import dev.simplified.persistence.JpaCacheProvider;
 import dev.simplified.persistence.Repository;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -43,31 +42,17 @@ import static org.hamcrest.Matchers.notNullValue;
  * <p>Test cases mirror {@link dev.sbs.minecraftapi.model.JpaModelTest} from {@code minecraft-api}
  * to exercise the production SkyBlock JSON model corpus end to end against real Hazelcast.</p>
  *
- * <p><b>CURRENTLY DISABLED - Phase 2a library gap.</b> When this test was first executed against
- * the real SkyBlock model layer, it surfaced a serialization incompatibility between Hibernate's
- * query results cache and Hazelcast's default Java serializer: entities that carry
- * {@code Optional<T>} fields (hydrated by Hibernate into {@link java.util.Optional}) cannot be
- * written to {@code QueryResultsCacheImpl$CacheItem} through Hazelcast because
- * {@code java.util.Optional} is not {@link java.io.Serializable}. The Hazelcast member itself
- * starts cleanly, registers all 46 model cache regions plus the two Hibernate-always-created
- * regions, and only fails on the first query results cache write. The EhCache baseline
- * ({@link dev.sbs.minecraftapi.model.JpaModelTest}) passes because EhCache's default heap
- * store does not require {@link java.io.Serializable}.</p>
- *
- * <p>The fix lives in {@code Simplified-Dev/persistence} (register a custom Hazelcast
- * {@code StreamSerializer} for {@link java.util.Optional}, or disable the query results cache
- * for HAZELCAST_* providers in {@code JpaConfig}, or switch the in-memory format of query cache
- * regions from {@code BINARY} to {@code OBJECT}). None of those edits are in Phase 2c scope
- * because Phase 2c is strictly the {@code simplified-data} module scaffold plus the
- * {@code infra/hazelcast/docker-compose.yml} wire-up. This test is preserved as the verification
- * sentinel for the follow-up library fix: remove {@link Disabled} once the Phase 2a gap is
- * closed and this suite will prove all four custom Gson types round-trip through Hazelcast's
- * JCache layer.</p>
+ * <p>Phase 2d (lazy streaming JpaRepository rewrite) re-enables this test. The Phase 2a
+ * crash root-caused to {@code JpaRepository.stream()} forcing
+ * {@code setCacheable(true).getResultList()} on every query, which routed results through
+ * Hibernate's query results region as {@code QueryResultsCacheImpl$CacheItem}
+ * (a {@link java.io.Serializable} envelope). Phase 2d switched {@code JpaRepository.stream()}
+ * to lazy {@code Query.getResultStream()} and disabled {@code hibernate.cache.use_query_cache}
+ * for both Hazelcast providers - the query results region is no longer created or written to,
+ * so the {@code ObjectOutputStream} graph walk that crashed on {@link java.util.Optional},
+ * {@code Stat$Substitute}, and friends is never entered. The L2 entity cache still populates
+ * as a side effect of streaming hydration, so per-id lookups remain cache-fast.</p>
  */
-@Disabled("Phase 2a library gap - Optional fields are not Serializable; Hazelcast query results "
-    + "cache serialization rejects them. Fix belongs in Simplified-Dev/persistence (custom "
-    + "StreamSerializer for Optional, or OBJECT in-memory-format for query cache regions). "
-    + "Phase 2c ships the wiring; remove this annotation after the library-side fix lands.")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class JpaModelHazelcastTest {
 
