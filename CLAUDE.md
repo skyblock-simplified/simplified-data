@@ -32,9 +32,12 @@ GitHub asset polling, and the skyblock-data repo integration.
 
 | Phase | Status | Scope |
 |---|---|---|
-| 2c | current | Spring Boot scaffold + Hazelcast client wiring + L2 cache validation |
-| 3 | future | Move 46 JSONs into the external skyblock-data repo |
-| 4 | future | RemoteJsonSource + DiskOverlaySource + asset polling pipeline |
+| 2c | done | Spring Boot scaffold + Hazelcast client wiring + L2 cache validation |
+| 2d | done | Lazy-streaming JpaRepository rewrite, query cache disabled under Hazelcast |
+| 3 | done | skyblock-data repo populated (42 JSONs, 41 entities, manifest generator, CI) |
+| 4a | done | Library-side Source interface foundation (Simplified-Dev/persistence) |
+| 4b | current | GitHub integration: SkyBlockDataContract + GitHubIndexProvider + GitHubFileFetcher + GitHubConfig |
+| 4c | future | Scheduled AssetPoller + delta engine + graceful degradation |
 | 5 | future | Switch to RemoteJsonSource backed by skyblock-data |
 | 6 | future | IQueue write consumer (skyblock.writes) |
 
@@ -67,3 +70,16 @@ GitHub asset polling, and the skyblock-data repo integration.
   provider must add the runtime dep itself. The matching `testRuntimeOnly` is required by
   `JpaModelHazelcastTest` because Gradle's `runtimeOnly` does not cascade into
   `testRuntimeClasspath`.
+
+### Environment variables
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `SKYBLOCK_DATA_GITHUB_TOKEN` | optional | empty | Fine-grained PAT used by `GitHubConfig` for the `Authorization: Bearer <token>` header on every GitHub REST API call. No repository access is required - public repo content is always readable. When absent or blank, the client logs a warning and falls back to unauthenticated requests at 60 req/hr per IP. Set for production deployments to unlock the 5000 req/hr authenticated budget. |
+| `SKYBLOCK_HAZELCAST_DISABLED` | optional | unset | When set to `true`, disables the Spring context-loads integration test in `SimplifiedDataApplicationTests` so CI without a live Hazelcast cluster can still run the rest of the suite. Does NOT affect production behavior. |
+
+Phase 4b reads `SKYBLOCK_DATA_GITHUB_TOKEN` via the Spring property placeholder
+`skyblock.data.github.token` defined in `application.properties`. The PAT is never persisted
+anywhere; it is resolved at context refresh, wrapped in a `Supplier<Optional<String>>`, and
+invoked per outbound HTTP request by the `dev.simplified.client.Client` dynamic-header
+interceptor.
