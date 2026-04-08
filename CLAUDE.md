@@ -36,8 +36,8 @@ GitHub asset polling, and the skyblock-data repo integration.
 | 2d | done | Lazy-streaming JpaRepository rewrite, query cache disabled under Hazelcast |
 | 3 | done | skyblock-data repo populated (42 JSONs, 41 entities, manifest generator, CI) |
 | 4a | done | Library-side Source interface foundation (Simplified-Dev/persistence) |
-| 4b | current | GitHub integration: SkyBlockDataContract + GitHubIndexProvider + GitHubFileFetcher + GitHubConfig |
-| 4c | future | Scheduled AssetPoller + delta engine + graceful degradation |
+| 4b | done | GitHub integration: SkyBlockDataContract + GitHubIndexProvider + GitHubFileFetcher + GitHubConfig |
+| 4c | current | Scheduled AssetPoller (watchdog-only) + AssetDiffEngine + dedicated asset-state JpaSession |
 | 5 | future | Switch to RemoteJsonSource backed by skyblock-data |
 | 6 | future | IQueue write consumer (skyblock.writes) |
 
