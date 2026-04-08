@@ -37,8 +37,8 @@ GitHub asset polling, and the skyblock-data repo integration.
 | 3 | done | skyblock-data repo populated (42 JSONs, 41 entities, manifest generator, CI) |
 | 4a | done | Library-side Source interface foundation (Simplified-Dev/persistence) |
 | 4b | done | GitHub integration: SkyBlockDataContract + GitHubIndexProvider + GitHubFileFetcher + GitHubConfig |
-| 4c | current | Scheduled AssetPoller (watchdog-only) + AssetDiffEngine + dedicated asset-state JpaSession |
-| 5 | future | Switch to RemoteJsonSource backed by skyblock-data |
+| 4c | done | Scheduled AssetPoller (watchdog-only) + AssetDiffEngine + dedicated asset-state JpaSession |
+| 5 | current | Switch SkyBlock repositories to RemoteSkyBlockFactory (DiskOverlaySource + RemoteJsonSource) |
 | 6 | future | IQueue write consumer (skyblock.writes) |
 
 ### Entry Point
@@ -75,7 +75,8 @@ GitHub asset polling, and the skyblock-data repo integration.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `SKYBLOCK_DATA_GITHUB_TOKEN` | optional | empty | Fine-grained PAT used by `GitHubConfig` for the `Authorization: Bearer <token>` header on every GitHub REST API call. No repository access is required - public repo content is always readable. When absent or blank, the client logs a warning and falls back to unauthenticated requests at 60 req/hr per IP. Set for production deployments to unlock the 5000 req/hr authenticated budget. |
+| `SKYBLOCK_DATA_GITHUB_TOKEN` | required (Phase 5+) | empty | Fine-grained PAT used by `GitHubConfig` for the `Authorization: Bearer <token>` header on every GitHub REST API call. No repository access is required - public repo content is always readable. Phase 5 loads all 41 SkyBlock entity JSONs from the skyblock-data repo at startup; without a PAT the 60 req/hr unauthenticated budget is exhausted mid-boot and `JpaSession.cacheRepositories()` throws `JpaException`, causing Spring to fail context refresh and the container to exit non-zero. Set the variable to unlock the 5000 req/hr authenticated budget. |
+| `SKYBLOCK_DATA_OVERLAY_PATH` | optional | `skyblock-data-overlay` | Base directory for `DiskOverlaySource` local-override lookups. Resolved as a `java.nio.file.Path`, either relative to the JVM working directory or absolute. The `RemoteSkyBlockFactory` joins this with `<@Table.name>.json` per model. Default resolves to a non-existent directory so production `DiskOverlaySource.load()` calls fall straight through to `RemoteJsonSource`. Dev contributors point this at a local `skyblock-data` checkout to test overrides without pushing to GitHub. |
 | `SKYBLOCK_HAZELCAST_DISABLED` | optional | unset | When set to `true`, disables the Spring context-loads integration test in `SimplifiedDataApplicationTests` so CI without a live Hazelcast cluster can still run the rest of the suite. Does NOT affect production behavior. |
 
 Phase 4b reads `SKYBLOCK_DATA_GITHUB_TOKEN` via the Spring property placeholder

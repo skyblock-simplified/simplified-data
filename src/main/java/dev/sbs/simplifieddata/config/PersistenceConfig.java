@@ -1,9 +1,13 @@
 package dev.sbs.simplifieddata.config;
 
 import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.minecraftapi.persistence.SkyBlockFactory;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
+import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.poller.LastResponseAccessor;
 import dev.simplified.client.Client;
+import dev.simplified.gson.GsonSettings;
+import dev.simplified.persistence.CacheMissingStrategy;
 import dev.simplified.persistence.JpaCacheProvider;
 import dev.simplified.persistence.JpaConfig;
 import dev.simplified.persistence.JpaSession;
@@ -11,12 +15,19 @@ import dev.simplified.persistence.RepositoryFactory;
 import dev.simplified.persistence.SessionManager;
 import dev.simplified.persistence.asset.ExternalAssetState;
 import dev.simplified.persistence.driver.H2MemoryDriver;
+import dev.simplified.persistence.source.FileFetcher;
+import dev.simplified.persistence.source.IndexProvider;
+import dev.simplified.util.Logging;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.log4j.Log4j2;
+import org.hibernate.annotations.CacheConcurrencyStrategy;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.nio.file.Path;
 
 /**
  * Wires the SkyBlock persistence layer for {@code simplified-data} against the dockerized
@@ -26,10 +37,13 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>This class exposes two {@link JpaSession} beans:
  * <ul>
- *   <li>{@link #skyBlockSession()} - the SkyBlock entity session backed by
+ *   <li>{@code skyBlockSession} - the SkyBlock entity session backed by
  *       {@link JpaCacheProvider#HAZELCAST_CLIENT}, scoped to
- *       {@code dev.sbs.minecraftapi.persistence.model}. This is the only session that
- *       Phase 2c/2d wired and it carries every SkyBlock JSON-backed entity.</li>
+ *       {@code dev.sbs.minecraftapi.persistence.model}. Phase 5 wires its
+ *       {@link RepositoryFactory} to a {@link RemoteSkyBlockFactory} so every repository
+ *       loads its data from the {@code skyblock-data} GitHub repo via
+ *       {@link dev.simplified.persistence.source.RemoteJsonSource} with an optional
+ *       {@link dev.simplified.persistence.source.DiskOverlaySource} local override layer.</li>
  *   <li>{@link #assetSession()} - a second session scoped to the Phase 4a
  *       {@code dev.simplified.persistence.asset} package. Carries only
  *       {@link ExternalAssetState} and {@code ExternalAssetEntryState}. Uses
@@ -57,9 +71,75 @@ import org.springframework.context.annotation.Configuration;
 @Log4j2
 public class PersistenceConfig {
 
+    /**
+     * Constructs the SkyBlock entity session backed by {@link JpaCacheProvider#HAZELCAST_CLIENT},
+     * wiring a {@link RemoteSkyBlockFactory} so every repository loads its data from the
+     * {@code skyblock-data} GitHub repo via {@link dev.simplified.persistence.source.RemoteJsonSource}
+     * with an optional {@link dev.simplified.persistence.source.DiskOverlaySource} local override
+     * layer.
+     *
+     * <p>This replaces the Phase 2c one-liner
+     * {@code MinecraftApi.connectSkyBlockSession(JpaCacheProvider.HAZELCAST_CLIENT)}. Every
+     * setting the one-liner preserved - driver, schema, Gson string-type mutation, query cache,
+     * L2 cache, {@code READ_WRITE} concurrency, {@code CREATE_WARN} missing-cache strategy,
+     * 30-second query TTL - is reproduced verbatim here because the {@link MinecraftApi}
+     * overload hardcodes {@link SkyBlockFactory} and cannot accept a caller-supplied factory.
+     * Drift between this block and the
+     * {@code MinecraftApi.connectSkyBlockSession(JpaCacheProvider)} method is a Phase 5
+     * regression hazard - if {@code minecraft-api} ever adds a new setting to the one-liner,
+     * mirror it here.
+     *
+     * <p>Session ownership is local: the bean constructs a fresh {@link SessionManager} rather
+     * than reusing {@link MinecraftApi#getSessionManager()}. This matches the
+     * {@link #assetSession()} pattern and keeps shutdown cleanly scoped to the Spring context.
+     *
+     * @param gitHubIndexProvider the Phase 4b manifest index provider bean
+     * @param gitHubFileFetcher the Phase 4b raw-file fetcher bean
+     * @param overlayBasePath the base directory for {@link dev.simplified.persistence.source.DiskOverlaySource}
+     *                        lookups, resolved from {@code skyblock.data.overlay.path}
+     * @return the SkyBlock {@link JpaSession}
+     */
     @Bean
-    public @NotNull JpaSession skyBlockSession() {
-        return MinecraftApi.connectSkyBlockSession(JpaCacheProvider.HAZELCAST_CLIENT);
+    public @NotNull JpaSession skyBlockSession(
+        @NotNull IndexProvider gitHubIndexProvider,
+        @NotNull FileFetcher gitHubFileFetcher,
+        @Value("${skyblock.data.overlay.path:skyblock-data-overlay}") @NotNull String overlayBasePath
+    ) {
+        SkyBlockFactory skyBlockFactory = MinecraftApi.getSkyBlockFactory();
+        RepositoryFactory remoteFactory = new RemoteSkyBlockFactory(
+            GitHubConfig.SOURCE_ID,
+            skyBlockFactory,
+            gitHubIndexProvider,
+            gitHubFileFetcher,
+            Path.of(overlayBasePath)
+        );
+
+        JpaConfig config = JpaConfig.builder()
+            .withDriver(new H2MemoryDriver())
+            .withSchema("skyblock")
+            .withCacheProvider(JpaCacheProvider.HAZELCAST_CLIENT)
+            .withRepositoryFactory(remoteFactory)
+            .withGsonSettings(
+                MinecraftApi.getServiceManager()
+                    .get(GsonSettings.class)
+                    .mutate()
+                    .withStringType(GsonSettings.StringType.DEFAULT)
+                    .build()
+            )
+            .withLogLevel(Logging.Level.WARN)
+            .isUsingQueryCache()
+            .isUsing2ndLevelCache()
+            .withCacheConcurrencyStrategy(CacheConcurrencyStrategy.READ_WRITE)
+            .withCacheMissingStrategy(CacheMissingStrategy.CREATE_WARN)
+            .withQueryResultsTTL(30)
+            .build();
+
+        JpaSession session = new SessionManager().connect(config);
+        log.info(
+            "simplified-data skyBlock session wired with RemoteSkyBlockFactory (sourceId='{}', overlayBasePath='{}', cacheProvider=HAZELCAST_CLIENT)",
+            GitHubConfig.SOURCE_ID, overlayBasePath
+        );
+        return session;
     }
 
     /**
