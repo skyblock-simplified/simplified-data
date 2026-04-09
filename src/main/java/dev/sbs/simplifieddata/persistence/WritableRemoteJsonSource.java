@@ -9,6 +9,7 @@ import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
 import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.write.BufferedMutation;
 import dev.sbs.simplifieddata.write.StagedBatch;
+import dev.sbs.simplifieddata.write.WriteMetrics;
 import dev.simplified.client.exception.PreconditionFailedException;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
@@ -139,6 +140,13 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
     private final int max412ImmediateRetries;
 
     /**
+     * Phase 6b.3 metrics holder used to register the per-type buffer-depth
+     * gauge at construction time and to record end-to-end commit latency on
+     * successful tick completion.
+     */
+    private final @NotNull WriteMetrics metrics;
+
+    /**
      * The in-memory buffer of pending mutations, keyed by the entity's @Id
      * field value rendered as a string. Upserts and deletes for the same id
      * overwrite each other within a tick, matching the semantics of a
@@ -164,6 +172,8 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
      * @param gson the Gson instance for list serialization
      * @param sourceId the human-readable source id
      * @param modelClass the entity class
+     * @param writeMetrics the Phase 6b.3 metrics holder - the constructor registers
+     *                     a per-type buffer depth gauge against this registry
      */
     public WritableRemoteJsonSource(
         @NotNull Source<T> delegate,
@@ -172,9 +182,10 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
         @NotNull IndexProvider indexProvider,
         @NotNull Gson gson,
         @NotNull String sourceId,
-        @NotNull Class<T> modelClass
+        @NotNull Class<T> modelClass,
+        @NotNull WriteMetrics writeMetrics
     ) {
-        this(delegate, writeContract, fileFetcher, indexProvider, gson, sourceId, modelClass, DEFAULT_MAX_412_IMMEDIATE_RETRIES);
+        this(delegate, writeContract, fileFetcher, indexProvider, gson, sourceId, modelClass, DEFAULT_MAX_412_IMMEDIATE_RETRIES, writeMetrics);
     }
 
     /**
@@ -191,6 +202,7 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
      * @param sourceId the human-readable source id
      * @param modelClass the entity class
      * @param max412ImmediateRetries maximum immediate 412 retries before escalation
+     * @param writeMetrics the Phase 6b.3 metrics holder
      */
     public WritableRemoteJsonSource(
         @NotNull Source<T> delegate,
@@ -200,7 +212,8 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
         @NotNull Gson gson,
         @NotNull String sourceId,
         @NotNull Class<T> modelClass,
-        int max412ImmediateRetries
+        int max412ImmediateRetries,
+        @NotNull WriteMetrics writeMetrics
     ) {
         this.delegate = delegate;
         this.writeContract = writeContract;
@@ -210,6 +223,7 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
         this.sourceId = sourceId;
         this.modelClass = modelClass;
         this.max412ImmediateRetries = max412ImmediateRetries;
+        this.metrics = writeMetrics;
         this.buffer = Concurrent.newMap();
         this.idAccessor = new Reflection<>(modelClass).getFields()
             .stream()
@@ -218,6 +232,13 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
             .orElseThrow(() -> new IllegalStateException(
                 "No @Id field found on entity class '" + modelClass.getName() + "' - cannot compute buffer key"
             ));
+
+        // Phase 6b.3: register this source's buffer depth as a Prometheus gauge
+        // tagged by entity class. One gauge per source instance; cardinality bounded
+        // at 41 (one per SkyBlock entity). The supplier is ConcurrentMap.size() which
+        // is O(1) and thread-safe, so Micrometer's scheduled sampling harness can
+        // invoke it freely without contention.
+        this.metrics.registerBufferDepthGauge(modelClass, this.buffer::size);
     }
 
     @Override

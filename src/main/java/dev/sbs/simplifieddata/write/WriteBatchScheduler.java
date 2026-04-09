@@ -191,6 +191,14 @@ public class WriteBatchScheduler {
 
         if (result.isSuccess()) {
             this.metrics.recordCommitSuccess(commitSample, WriteMetrics.CommitMode.GIT_DATA);
+            // Phase 6b.3 end-to-end latency: for every mutation that landed in this
+            // tick's commit, record the duration from when it was buffered to now.
+            // Measures producer -> GitHub latency per individual mutation, useful
+            // for p95/p99 histograms on dashboards.
+            for (StagedBatch<?> sourceBatch : request.getSourceBatches()) {
+                for (BufferedMutation<?> mutation : sourceBatch.getMutationsUntyped())
+                    this.metrics.recordEndToEndLatency(mutation.getBufferedAt());
+            }
             log.info(
                 "Git Data tick summary: applied={} files={} commit={} (shutdown={})",
                 request.getTotalMutationCount(), request.getDirtyFileCount(), result.getCommitSha(), isShutdown

@@ -277,7 +277,8 @@ class WriteQueueConsumerTest {
                 new ThrowingContract(),
                 MinecraftApi.getGson(),
                 java.nio.file.Path.of("target/stub-overlay-does-not-exist"),
-                3
+                3,
+                new WriteMetrics(new SimpleMeterRegistry())
             );
         }
 
@@ -320,7 +321,8 @@ class WriteQueueConsumerTest {
                 MinecraftApi.getGson(),
                 "recording-" + modelClass.getSimpleName(),
                 modelClass,
-                3
+                3,
+                new WriteMetrics(new SimpleMeterRegistry())
             );
         }
 

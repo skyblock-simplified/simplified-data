@@ -10,6 +10,7 @@ import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.PutContentRequest;
 import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
 import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
+import dev.sbs.simplifieddata.write.WriteMetrics;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.JpaModel;
@@ -19,6 +20,7 @@ import dev.simplified.persistence.source.FileFetcher;
 import dev.simplified.persistence.source.IndexProvider;
 import dev.simplified.persistence.source.RemoteJsonSource;
 import dev.simplified.persistence.source.Source;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.Test;
 
@@ -76,7 +78,8 @@ final class RemoteSkyBlockFactoryTest {
 
     private static @NotNull RemoteSkyBlockFactory newFactory(@NotNull SkyBlockFactory delegate) {
         return new RemoteSkyBlockFactory(
-            "skyblock-data", delegate, THROWING_INDEX, THROWING_FETCHER, THROWING_WRITE, GSON, OVERLAY_BASE, 3
+            "skyblock-data", delegate, THROWING_INDEX, THROWING_FETCHER, THROWING_WRITE, GSON, OVERLAY_BASE, 3,
+            new WriteMetrics(new SimpleMeterRegistry())
         );
     }
 

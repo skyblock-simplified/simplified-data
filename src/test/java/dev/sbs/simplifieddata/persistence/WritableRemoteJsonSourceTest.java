@@ -8,6 +8,7 @@ import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.PutContentRequest;
 import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
 import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
+import dev.sbs.simplifieddata.write.WriteMetrics;
 import dev.simplified.client.exception.PreconditionFailedException;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
@@ -17,6 +18,7 @@ import dev.simplified.persistence.source.FileFetcher;
 import dev.simplified.persistence.source.IndexProvider;
 import dev.simplified.persistence.source.ManifestIndex;
 import dev.simplified.persistence.source.Source;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -446,7 +448,8 @@ class WritableRemoteJsonSourceTest {
             GSON,
             SOURCE_ID,
             ZodiacEvent.class,
-            3
+            3,
+            new WriteMetrics(new SimpleMeterRegistry())
         );
     }
 
@@ -464,7 +467,8 @@ class WritableRemoteJsonSourceTest {
             GSON,
             SOURCE_ID,
             ZodiacEvent.class,
-            3
+            3,
+            new WriteMetrics(new SimpleMeterRegistry())
         );
     }
 
@@ -481,7 +485,8 @@ class WritableRemoteJsonSourceTest {
             GSON,
             SOURCE_ID,
             ZodiacEvent.class,
-            3
+            3,
+            new WriteMetrics(new SimpleMeterRegistry())
         );
     }
 

@@ -3,6 +3,7 @@ package dev.sbs.simplifieddata.persistence;
 import com.google.gson.Gson;
 import dev.sbs.minecraftapi.persistence.SkyBlockFactory;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
+import dev.sbs.simplifieddata.write.WriteMetrics;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.collection.ConcurrentMap;
@@ -106,7 +107,8 @@ public class RemoteSkyBlockFactory implements RepositoryFactory {
         @NotNull SkyBlockDataWriteContract writeContract,
         @NotNull Gson gson,
         @NotNull Path overlayBasePath,
-        int max412ImmediateRetries
+        int max412ImmediateRetries,
+        @NotNull WriteMetrics writeMetrics
     ) {
         this.sourceId = sourceId;
         this.models = delegate.getModels();
@@ -116,7 +118,7 @@ public class RemoteSkyBlockFactory implements RepositoryFactory {
         for (Class<JpaModel> modelClass : this.models) {
             WritableRemoteJsonSource<?> writable = buildSourceFor(
                 modelClass, sourceId, indexProvider, fileFetcher,
-                writeContract, gson, overlayBasePath, max412ImmediateRetries
+                writeContract, gson, overlayBasePath, max412ImmediateRetries, writeMetrics
             );
             this.sources.put(modelClass, writable);
             this.writableSources.put(modelClass, writable);
@@ -165,7 +167,8 @@ public class RemoteSkyBlockFactory implements RepositoryFactory {
         @NotNull SkyBlockDataWriteContract writeContract,
         @NotNull Gson gson,
         @NotNull Path overlayBasePath,
-        int max412ImmediateRetries
+        int max412ImmediateRetries,
+        @NotNull WriteMetrics writeMetrics
     ) {
         Table table = (Table) modelClass.getAnnotation(Table.class);
 
@@ -185,7 +188,8 @@ public class RemoteSkyBlockFactory implements RepositoryFactory {
             gson,
             sourceId,
             (Class<T>) modelClass,
-            max412ImmediateRetries
+            max412ImmediateRetries,
+            writeMetrics
         );
     }
 

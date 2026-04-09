@@ -9,6 +9,7 @@ import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.poller.LastResponseAccessor;
 import dev.sbs.simplifieddata.poller.RefreshTrigger;
+import dev.sbs.simplifieddata.write.WriteMetrics;
 import dev.simplified.client.Client;
 import dev.simplified.gson.GsonSettings;
 import dev.simplified.persistence.CacheMissingStrategy;
@@ -117,6 +118,7 @@ public class PersistenceConfig {
         @NotNull IndexProvider gitHubIndexProvider,
         @NotNull FileFetcher gitHubFileFetcher,
         @NotNull SkyBlockDataWriteContract skyBlockDataWriteContract,
+        @NotNull WriteMetrics writeMetrics,
         @Value("${skyblock.data.overlay.path:skyblock-data-overlay}") @NotNull String overlayBasePath,
         @Value("${skyblock.data.github.write-412-immediate-retries:3}") int max412ImmediateRetries
     ) {
@@ -129,7 +131,8 @@ public class PersistenceConfig {
             skyBlockDataWriteContract,
             MinecraftApi.getGson(),
             Path.of(overlayBasePath),
-            max412ImmediateRetries
+            max412ImmediateRetries,
+            writeMetrics
         );
     }
 
