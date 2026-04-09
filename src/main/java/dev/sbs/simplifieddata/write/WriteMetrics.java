@@ -5,6 +5,7 @@ import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
 import dev.simplified.persistence.JpaModel;
 import dev.simplified.persistence.source.WriteRequest;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
@@ -265,30 +266,40 @@ public class WriteMetrics {
      * @param sizeSupplier a thread-safe supplier of the current buffer size
      */
     public void registerBufferDepthGauge(@NotNull Class<? extends JpaModel> entityType, @NotNull Supplier<Number> sizeSupplier) {
-        this.registry.gauge(
-            METER_BUFFER_DEPTH,
-            Tags.of(TAG_TYPE, entityType.getName()),
-            sizeSupplier,
-            supplier -> supplier.get().doubleValue()
-        );
+        // Use the builder API with strongReference(true). The default
+        // MeterRegistry.gauge(...) overload holds the third argument as a weak
+        // reference, which means an ephemeral method reference like
+        // `this.buffer::size` gets GC'd immediately after registration and
+        // subsequent scrapes report NaN. strongReference(true) anchors the
+        // supplier so it stays alive for the lifetime of the registry.
+        Gauge.builder(METER_BUFFER_DEPTH, sizeSupplier, s -> s.get().doubleValue())
+            .tags(Tags.of(TAG_TYPE, entityType.getName()))
+            .strongReference(true)
+            .register(this.registry);
     }
 
     /** Registers the Hazelcast retry IMap size gauge. Called once by {@link WriteQueueConsumer#start()}. */
     public void registerRetryImapSizeGauge(@NotNull HazelcastInstance instance) {
         IMap<UUID, RetryEnvelope> retryMap = instance.getMap(WriteQueueConsumer.RETRY_MAP_NAME);
-        this.registry.gauge(METER_RETRY_IMAP_SIZE, retryMap, IMap::size);
+        Gauge.builder(METER_RETRY_IMAP_SIZE, retryMap, m -> (double) m.size())
+            .strongReference(true)
+            .register(this.registry);
     }
 
     /** Registers the Hazelcast dead-letter IMap size gauge. Called once by {@link WriteQueueConsumer#start()}. */
     public void registerDeadletterImapSizeGauge(@NotNull HazelcastInstance instance) {
         IMap<UUID, WriteRequest> deadletter = instance.getMap(WriteQueueConsumer.DEADLETTER_MAP_NAME);
-        this.registry.gauge(METER_DEADLETTER_IMAP_SIZE, deadletter, IMap::size);
+        Gauge.builder(METER_DEADLETTER_IMAP_SIZE, deadletter, m -> (double) m.size())
+            .strongReference(true)
+            .register(this.registry);
     }
 
     /** Registers the Hazelcast primary IQueue size gauge. Called once by {@link WriteQueueConsumer#start()}. */
     public void registerPrimaryQueueSizeGauge(@NotNull HazelcastInstance instance) {
         IQueue<WriteRequest> queue = instance.getQueue(WriteQueueConsumer.QUEUE_NAME);
-        this.registry.gauge(METER_PRIMARY_QUEUE_SIZE, queue, IQueue::size);
+        Gauge.builder(METER_PRIMARY_QUEUE_SIZE, queue, q -> (double) q.size())
+            .strongReference(true)
+            .register(this.registry);
     }
 
     /** Exposes the underlying registry for tests and Spring Boot Actuator introspection. */
