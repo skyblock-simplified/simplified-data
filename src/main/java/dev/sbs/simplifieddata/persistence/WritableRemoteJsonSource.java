@@ -432,49 +432,61 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
             mutatedExtra.addAll(currentExtra);
         }
 
-        // Build the id -> file ownership lookup. Extras wins on conflict
-        // so subsequent dispatch sees the authoritative file for each id.
-        java.util.Map<String, FileOwner> ownership = new java.util.HashMap<>();
+        // Build the id -> file ownership lookup. An id can appear in BOTH the
+        // primary and extras files simultaneously (e.g. a third-party API
+        // entity with a manual override in _extra.json), so ownership is
+        // tracked as a Set rather than a single value.
+        java.util.Map<String, java.util.EnumSet<FileOwner>> ownership = new java.util.HashMap<>();
 
         for (T e : mutatedPrimary) {
             String id = this.requireIdString(e);
-            ownership.put(id, FileOwner.PRIMARY);
+            ownership.computeIfAbsent(id, k -> java.util.EnumSet.noneOf(FileOwner.class)).add(FileOwner.PRIMARY);
         }
 
         if (mutatedExtra != null) {
             for (T e : mutatedExtra) {
                 String id = this.requireIdString(e);
-                ownership.put(id, FileOwner.EXTRA);
+                ownership.computeIfAbsent(id, k -> java.util.EnumSet.noneOf(FileOwner.class)).add(FileOwner.EXTRA);
             }
         }
 
-        // Dispatch every buffered mutation to its owning file.
+        // Dispatch every buffered mutation to its owning file(s).
+        //
+        // UPSERT policy: extras wins on conflict - update the extras copy
+        // in place (corrections/overrides are authoritative) and leave the
+        // primary copy alone. A brand-new id defaults to the primary.
+        //
+        // DELETE policy: remove from ALL owning files. An id present in
+        // both files must be fully removed so the read-path append merge
+        // does not surface a stale primary copy after the delete. This
+        // corrects a Phase 6b.1 bug where DELETE of a conflicted id only
+        // removed the extras copy.
         for (java.util.Map.Entry<String, BufferedMutation<T>> bufferedEntry : snapshot.entrySet()) {
             String id = bufferedEntry.getKey();
             BufferedMutation<T> mutation = bufferedEntry.getValue();
-            FileOwner owner = ownership.get(id);
+            java.util.EnumSet<FileOwner> owners = ownership.getOrDefault(id, java.util.EnumSet.noneOf(FileOwner.class));
 
             switch (mutation.getOperation()) {
                 case UPSERT -> {
-                    if (owner == FileOwner.EXTRA) {
+                    if (owners.contains(FileOwner.EXTRA)) {
                         replaceInPlace(mutatedExtra, id, mutation.getEntity());
-                    } else if (owner == FileOwner.PRIMARY) {
+                    } else if (owners.contains(FileOwner.PRIMARY)) {
                         replaceInPlace(mutatedPrimary, id, mutation.getEntity());
                     } else {
                         // New id - default to primary.
                         mutatedPrimary.add(mutation.getEntity());
-                        ownership.put(id, FileOwner.PRIMARY);
+                        ownership.put(id, java.util.EnumSet.of(FileOwner.PRIMARY));
                     }
                 }
                 case DELETE -> {
-                    if (owner == FileOwner.EXTRA) {
+                    if (owners.contains(FileOwner.EXTRA)) {
                         removeById(mutatedExtra, id);
-                        ownership.remove(id);
-                    } else if (owner == FileOwner.PRIMARY) {
-                        removeById(mutatedPrimary, id);
-                        ownership.remove(id);
                     }
-                    // Delete of a non-existent id is a silent no-op.
+                    if (owners.contains(FileOwner.PRIMARY)) {
+                        removeById(mutatedPrimary, id);
+                    }
+                    ownership.remove(id);
+                    // Delete of an id not present in either file is a silent no-op.
                 }
             }
         }

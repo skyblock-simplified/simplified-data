@@ -364,6 +364,61 @@ class WritableRemoteJsonSourceTest {
     }
 
     @Test
+    @DisplayName("stageBatch UPSERT of an id present in BOTH files updates ONLY the extras copy (extras wins)")
+    void stageBatchUpsertConflictKeepsExtrasAuthoritative() throws Exception {
+        this.indexProvider.hasExtra = true;
+
+        // Same id in both files with different state - extras is the correction.
+        ZodiacEvent upstream = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
+        ZodiacEvent correction = event("YEAR_OF_THE_SEAL", "Year of the Seal (corrected)", 499);
+        this.fileFetcher.put(FILE_PATH, GSON.toJson(List.of(upstream)));
+        this.fileFetcher.put(this.indexProvider.extraPath, GSON.toJson(List.of(correction)));
+
+        WritableRemoteJsonSource<ZodiacEvent> source = newStagingSource();
+        source.upsert(event("YEAR_OF_THE_SEAL", "Year of the Seal (re-corrected)", 500));
+
+        dev.sbs.simplifieddata.write.StagedBatch<ZodiacEvent> staged = source.stageBatch();
+
+        // Only the extras file should be dirty - primary is untouched.
+        assertThat(staged.getFileSnapshots().size(), equalTo(1));
+        assertThat(staged.getFileSnapshots().containsKey(this.indexProvider.extraPath), is(true));
+        assertThat(staged.getFileSnapshots().containsKey(FILE_PATH), is(false));
+
+        ConcurrentList<ZodiacEvent> mutatedExtra = staged.getFileSnapshots().get(this.indexProvider.extraPath);
+        assertThat(mutatedExtra, hasSize(1));
+        assertThat(mutatedExtra.get(0).getName(), equalTo("Year of the Seal (re-corrected)"));
+        assertThat(mutatedExtra.get(0).getReleaseYear(), equalTo(500));
+    }
+
+    @Test
+    @DisplayName("stageBatch DELETE of an id present in BOTH files removes from BOTH files")
+    void stageBatchDeleteConflictRemovesFromBothFiles() throws Exception {
+        this.indexProvider.hasExtra = true;
+
+        ZodiacEvent upstream = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
+        ZodiacEvent correction = event("YEAR_OF_THE_SEAL", "Year of the Seal (corrected)", 499);
+        ZodiacEvent otherPrimary = event("YEAR_OF_THE_WHALE", "Year of the Whale", 413);
+        this.fileFetcher.put(FILE_PATH, GSON.toJson(List.of(upstream, otherPrimary)));
+        this.fileFetcher.put(this.indexProvider.extraPath, GSON.toJson(List.of(correction)));
+
+        WritableRemoteJsonSource<ZodiacEvent> source = newStagingSource();
+        source.delete(correction);
+
+        dev.sbs.simplifieddata.write.StagedBatch<ZodiacEvent> staged = source.stageBatch();
+
+        // BOTH files should be dirty - the stale primary copy was removed.
+        assertThat(staged.getFileSnapshots().size(), equalTo(2));
+        assertThat(staged.getFileSnapshots().containsKey(FILE_PATH), is(true));
+        assertThat(staged.getFileSnapshots().containsKey(this.indexProvider.extraPath), is(true));
+
+        ConcurrentList<ZodiacEvent> mutatedPrimary = staged.getFileSnapshots().get(FILE_PATH);
+        ConcurrentList<ZodiacEvent> mutatedExtra = staged.getFileSnapshots().get(this.indexProvider.extraPath);
+        assertThat(mutatedPrimary, hasSize(1));
+        assertThat(mutatedPrimary.get(0).getId(), equalTo("YEAR_OF_THE_WHALE"));
+        assertThat(mutatedExtra, hasSize(0));
+    }
+
+    @Test
     @DisplayName("stageBatch produces no dirty files when every upsert is byte-identical to current state")
     void stageBatchSuppressesNoOp() throws Exception {
         ZodiacEvent existing = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
