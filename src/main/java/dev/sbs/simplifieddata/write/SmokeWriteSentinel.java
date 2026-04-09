@@ -6,34 +6,66 @@ import dev.sbs.minecraftapi.MinecraftApi;
 import dev.sbs.minecraftapi.persistence.model.ZodiacEvent;
 import dev.simplified.persistence.source.WriteRequest;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.log4j.Log4j2;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Field;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Phase 6b gate-7 smoke harness bean. Only active when the Spring profile
  * {@code smoke} is set via {@code SPRING_PROFILES_ACTIVE=smoke}.
  *
- * <p>On context refresh this bean puts exactly one synthetic
- * {@link WriteRequest} onto the Hazelcast {@code skyblock.writes} queue -
- * an upsert of a sentinel {@link ZodiacEvent} with fixed id
- * {@link #SENTINEL_ID}. The operator runs the stack, waits for the
- * {@link WriteBatchScheduler}'s next tick (at most
- * {@code skyblock.data.github.write-batch-interval-seconds}, default 10s),
- * observes the GitHub commit on the {@code skyblock-data} {@code master}
- * branch, and then reverts the synthetic mutation by editing the file
- * through a local overlay + restart. The profile should NEVER be active in
- * production.
+ * <p>On context refresh this bean emits a two-phase self-cleaning smoke run:
+ * <ol>
+ *   <li><b>Phase 1 ({@code @PostConstruct}):</b> puts an UPSERT
+ *       {@link WriteRequest} for a sentinel {@link ZodiacEvent} with fixed
+ *       id {@link #SENTINEL_ID} onto the Hazelcast
+ *       {@link WriteQueueConsumer#QUEUE_NAME} queue. The
+ *       {@link WriteBatchScheduler}'s next tick (default 10s) stages and
+ *       commits the mutation to {@code skyblock-data} master.</li>
+ *   <li><b>Phase 2 ({@link #CLEANUP_DELAY} later):</b> a daemon
+ *       {@link ScheduledExecutorService} fires once and emits a DELETE
+ *       {@link WriteRequest} for the same sentinel id. The scheduler's next
+ *       tick commits the removal to master, returning the file to its
+ *       pre-run state.</li>
+ * </ol>
  *
- * <p>The sentinel id is intentionally outside the existing
- * {@code YEAR_OF_THE_*} namespace so accidental non-revert runs do not
- * clobber real data; the Phase 5.5 {@code AssetPoller}'s next cycle detects
- * the new commit and fires a targeted refresh for the {@link ZodiacEvent}
- * model class, proving the full write-to-read loop end-to-end.
+ * <p>Both phases produce distinct commits on the
+ * {@code skyblock-data} master branch and both exercise the full write
+ * path (Hazelcast IQueue → WriteQueueConsumer → WritableRemoteJsonSource
+ * buffer → WriteBatchScheduler → GitDataCommitService → GitHub). Phase 1
+ * proves upsert + commit creation; phase 2 proves delete + file cleanup.
+ * The Phase 5.5 {@code AssetPoller} detects both commits within one poll
+ * cycle ({@code ~60s} each), firing a targeted refresh on the
+ * {@link ZodiacEvent} model class both times. The profile should NEVER be
+ * active in production.
+ *
+ * <p>The cleanup delay ({@link #CLEANUP_DELAY}) must be long enough for
+ * phase 1's upsert to land on master before the delete is enqueued.
+ * Otherwise the delete would land in the same {@code WritableRemoteJsonSource}
+ * buffer as the upsert, overwrite it via the
+ * {@code ConcurrentMap<String, BufferedMutation>} per-id replace semantics,
+ * and collapse the two-operation run into just a delete (which is a silent
+ * no-op if the sentinel was not on master before the run). 30 seconds
+ * covers the typical flow: WriteBatchScheduler 10s tick + ~3s commit
+ * latency + safety margin. Under sustained write failures the retry path
+ * may extend the upsert's effective commit time beyond 30 seconds; in that
+ * edge case the delete collapses with the pending retry and operators
+ * should manually revert from master.
+ *
+ * <p>Container teardown within the cleanup window cancels the pending
+ * delete task (daemon thread dies with the JVM), leaving the sentinel on
+ * master until the operator reverts it manually. This is accepted - the
+ * smoke harness is opt-in and operators who kill the container during a
+ * run accept the cleanup burden.
  *
  * <p>Idempotency: the sentinel's {@link ZodiacEvent#getName() name} field
  * embeds a per-boot {@link Instant#now()} timestamp so the serialized JSON
@@ -41,11 +73,10 @@ import java.time.Instant;
  * gate-7 debugging finding: if a previous smoke run was never reverted from
  * {@code skyblock-data} master and this harness emitted byte-identical
  * sentinel state, {@link dev.sbs.simplifieddata.persistence.WritableRemoteJsonSource#stageBatch()}
- * would correctly detect the no-op and suppress the commit, making the gate
- * appear stuck. With a timestamp-varying name field every run produces a
- * distinguishable commit on {@code master}, keeps the fixed id for easy
- * grep / manual cleanup, and updates the single sentinel row in place
- * instead of accumulating duplicate entries across runs.
+ * would correctly detect the no-op and suppress the upsert commit, making
+ * the gate appear stuck. With a timestamp-varying name field every run
+ * produces a distinguishable upsert commit even when stacking against a
+ * non-reverted prior run.
  */
 @Component
 @Profile("smoke")
@@ -65,40 +96,118 @@ public class SmokeWriteSentinel {
      */
     static final @NotNull String SENTINEL_NAME_PREFIX = "Phase 6b Smoke Test";
 
+    /**
+     * Delay between the phase 1 upsert enqueue and the phase 2 delete
+     * enqueue. Must exceed {@code WriteBatchScheduler}'s tick interval
+     * (default 10s) plus commit latency so the upsert has a chance to reach
+     * GitHub before the delete lands in the source buffer.
+     */
+    static final @NotNull Duration CLEANUP_DELAY = Duration.ofSeconds(30);
+
     private final @NotNull HazelcastInstance writeHazelcastInstance;
+
+    /**
+     * Single-threaded daemon executor used to schedule the phase 2 cleanup
+     * delete. Daemon so it does not block JVM shutdown; single-threaded
+     * because the harness only schedules one task per bean lifetime. Shut
+     * down via {@link #shutdownCleanupScheduler()} on bean teardown.
+     */
+    private final @NotNull ScheduledExecutorService cleanupScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "smoke-sentinel-cleanup");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public SmokeWriteSentinel(@NotNull HazelcastInstance skyBlockWriteHazelcastInstance) {
         this.writeHazelcastInstance = skyBlockWriteHazelcastInstance;
     }
 
+    /**
+     * Phase 1: emits the UPSERT sentinel WriteRequest at bean init and
+     * schedules the phase 2 cleanup delete for {@link #CLEANUP_DELAY} later.
+     */
     @PostConstruct
     void emitSentinelOnBoot() {
         try {
             String sentinelName = SENTINEL_NAME_PREFIX + " @ " + Instant.now();
-            ZodiacEvent sentinel = new ZodiacEvent();
-            setField(sentinel, "id", SENTINEL_ID);
-            setField(sentinel, "name", sentinelName);
-            setField(sentinel, "releaseYear", SENTINEL_RELEASE_YEAR);
-
-            WriteRequest request = WriteRequest.upsert(
-                ZodiacEvent.class,
-                sentinel,
-                MinecraftApi.getGson(),
-                "skyblock-data"
-            );
-
-            IQueue<WriteRequest> queue = this.writeHazelcastInstance.getQueue(WriteQueueConsumer.QUEUE_NAME);
-            queue.put(request);
+            WriteRequest upsert = this.buildUpsertRequest(sentinelName);
+            this.enqueue(upsert);
 
             log.warn(
-                "SMOKE PROFILE ACTIVE: emitted sentinel WriteRequest {} (UPSERT ZodiacEvent id='{}' name='{}') - "
-                    + "expected path: WriteQueueConsumer drains within ~1s, WriteBatchScheduler commits within ~10s, "
-                    + "AssetPoller detects new commit within ~60s. Revert the sentinel from skyblock-data master after verification.",
-                request.getRequestId(), SENTINEL_ID, sentinelName
+                "SMOKE PROFILE ACTIVE: emitted UPSERT sentinel WriteRequest {} (ZodiacEvent id='{}' name='{}') - "
+                    + "expected path: WriteQueueConsumer drains within ~1s, WriteBatchScheduler commits within ~10s. "
+                    + "Phase 2 cleanup DELETE scheduled for {} from now.",
+                upsert.getRequestId(), SENTINEL_ID, sentinelName, CLEANUP_DELAY
+            );
+
+            this.cleanupScheduler.schedule(
+                this::emitSentinelCleanup,
+                CLEANUP_DELAY.toMillis(),
+                TimeUnit.MILLISECONDS
             );
         } catch (Throwable ex) {
-            log.error("SMOKE PROFILE ACTIVE: failed to emit sentinel WriteRequest", ex);
+            log.error("SMOKE PROFILE ACTIVE: failed to emit phase 1 UPSERT sentinel WriteRequest", ex);
         }
+    }
+
+    /**
+     * Phase 2: emits the DELETE sentinel WriteRequest after the cleanup
+     * delay elapses. Fired from the daemon {@link #cleanupScheduler} thread,
+     * so exceptions are swallowed here to prevent silent executor death -
+     * the operator still has the manual-revert escape hatch if this fails.
+     */
+    private void emitSentinelCleanup() {
+        try {
+            WriteRequest delete = this.buildDeleteRequest();
+            this.enqueue(delete);
+
+            log.warn(
+                "SMOKE PROFILE ACTIVE: emitted DELETE cleanup WriteRequest {} (ZodiacEvent id='{}') - "
+                    + "expected path: WriteBatchScheduler commits within ~10s, returning skyblock-data master to pre-run state.",
+                delete.getRequestId(), SENTINEL_ID
+            );
+        } catch (Throwable ex) {
+            log.error(
+                "SMOKE PROFILE ACTIVE: failed to emit phase 2 DELETE cleanup WriteRequest - "
+                    + "the sentinel is still on skyblock-data master and must be reverted manually",
+                ex
+            );
+        }
+    }
+
+    /**
+     * Shuts down the cleanup scheduler on bean teardown. Used
+     * {@link ScheduledExecutorService#shutdownNow()} to interrupt any
+     * in-flight cleanup task, matching the accepted contract that container
+     * teardown mid-run leaves cleanup responsibility with the operator.
+     */
+    @PreDestroy
+    void shutdownCleanupScheduler() {
+        this.cleanupScheduler.shutdownNow();
+    }
+
+    private @NotNull WriteRequest buildUpsertRequest(@NotNull String sentinelName) {
+        ZodiacEvent sentinel = new ZodiacEvent();
+        setField(sentinel, "id", SENTINEL_ID);
+        setField(sentinel, "name", sentinelName);
+        setField(sentinel, "releaseYear", SENTINEL_RELEASE_YEAR);
+        return WriteRequest.upsert(ZodiacEvent.class, sentinel, MinecraftApi.getGson(), "skyblock-data");
+    }
+
+    private @NotNull WriteRequest buildDeleteRequest() {
+        // Name and releaseYear are irrelevant for DELETE dispatch (the
+        // source matches on id only), but set them for audit log readability
+        // when the operator inspects the dead-letter IMap.
+        ZodiacEvent sentinel = new ZodiacEvent();
+        setField(sentinel, "id", SENTINEL_ID);
+        setField(sentinel, "name", SENTINEL_NAME_PREFIX + " (cleanup)");
+        setField(sentinel, "releaseYear", SENTINEL_RELEASE_YEAR);
+        return WriteRequest.delete(ZodiacEvent.class, sentinel, MinecraftApi.getGson(), "skyblock-data");
+    }
+
+    private void enqueue(@NotNull WriteRequest request) throws InterruptedException {
+        IQueue<WriteRequest> queue = this.writeHazelcastInstance.getQueue(WriteQueueConsumer.QUEUE_NAME);
+        queue.put(request);
     }
 
     private static void setField(@NotNull Object target, @NotNull String fieldName, @NotNull Object value) {
