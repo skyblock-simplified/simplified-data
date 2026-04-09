@@ -35,9 +35,20 @@ dependencies {
     testImplementation(libs.junit.platform.launcher)
     testImplementation(libs.spring.boot.starter.test)
 
-    // Spring Boot
-    implementation(libs.spring.boot.starter)
-    implementation(libs.spring.boot.starter.actuator)
+    // Server framework - transitively provides spring-boot-starter-web and
+    // spring-boot-starter-actuator via api() exports. Phase 6b.3 swapped the
+    // previous spring-boot-starter + spring-boot-starter-actuator pair for this
+    // single dep so the Spring setup matches simplified-server / server-api, and
+    // simplified-data picks up the servlet container required for the
+    // /actuator/prometheus scrape endpoint. API key authentication is disabled
+    // in application.properties because simplified-data exposes no REST
+    // endpoints to protect.
+    implementation("dev.sbs:server-api:0.1.0")
+
+    // Micrometer Prometheus registry - Phase 6b.3. Version pinned explicitly via
+    // the catalog to avoid drift against Spring Boot's managed dependencies
+    // since simplified-data does not import spring-boot-dependencies as a BOM.
+    implementation(libs.micrometer.registry.prometheus)
 
     // Hazelcast - promoted from runtimeOnly to implementation in Phase 6b because
     // PersistenceConfig now references HazelcastInstance + HazelcastClient directly
@@ -49,6 +60,7 @@ dependencies {
 
     // Projects
     implementation("dev.sbs:minecraft-api:0.1.0")
+    testImplementation("dev.sbs:minecraft-renderer:0.1.0")
 }
 
 tasks {
