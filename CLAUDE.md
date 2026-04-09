@@ -42,7 +42,11 @@ GitHub asset polling, and the skyblock-data repo integration.
 | 5.5 | done | AssetPoller targeted refresh trigger via `RefreshTrigger` SAM + `JpaSession.refreshModels` library API. Changes propagate on the next 60s poll instead of waiting for restart. |
 | 5.5.1 | done | Deleted obsolete Phase 4b ETagContext workaround after `Simplified-Dev/client` auto-attaches `If-None-Match` and transparently serves cached bodies on 304. Net -160 lines across GitHubConfig, AssetPoller, SkyBlockDataException, AssetPollerTest. |
 | 5.5.2 | done | Hotfix: switch `SkyBlockDataContract.getLatestMasterCommit` from `/commits?sha=master&per_page=1` (stale edge cache, observed 10+ min lag) to `/commits/master` (always fresh via git ref path). Return type collapsed to single `GitHubCommit`. Phase 5.5 gate-6 end-to-end verified live against docker. |
-| 6 | future | IQueue write consumer (skyblock.writes) |
+| 6a | done | `WriteRequest` envelope class + 9 unit tests in `Simplified-Dev/persistence`. Plain Java `Serializable`, pre-serialized `entityJson`, `UPSERT`/`DELETE` nested enum. Library foundation for the IQueue write path. |
+| 6b | done | **Write path wiring**: `WritableRemoteJsonSource<T>` wraps the `DiskOverlaySource(RemoteJsonSource)` chain and layers GitHub Contents API PUT on top. `SkyBlockDataWriteContract` + new DTOs + separate `skyBlockDataWriteClient` bean with `Accept: application/vnd.github+json`. `WriteQueueConsumer` daemon thread drains `skyblock.writes` IQueue + a local `DelayQueue<DelayedWriteRequest>` for exponential-backoff retries; dead-letter to `skyblock.writes.deadletter` IMap after 5 attempts. `WriteBatchScheduler` fires every 10s and escalates failures to the consumer's retry queue. `skyBlockWriteHazelcastInstance` bean in `PersistenceConfig` (second client alongside the JCache-managed instance). `RemoteSkyBlockFactory` wraps every per-model source in a `WritableRemoteJsonSource` and exposes a typed `getWritableSources()` registry for the write-path beans. `SmokeWriteSentinel` bean activated under `@Profile("smoke")` for gate-7 end-to-end docker testing. Dormant `SkyBlockGitDataContract` + 8 Git Data API DTOs shipped as an extractable API surface with compile-only DTO round-trip tests - no production caller in Phase 6b, reserved for a future Phase 6e multi-file commit coalescing path. |
+| 6c | future | simplified-bot producer SDK (`WriteDispatcher` service bean) - speculatively ship without concrete write triggers |
+| 6d | future | Operator runbook: `SKYBLOCK_DATA_GITHUB_TOKEN` upgraded to `contents:write` scope |
+| 7 | future | Delete the 42 resource JSONs from `minecraft-api/src/main/resources/skyblock/` |
 
 ### Entry Point
 
@@ -52,13 +56,56 @@ GitHub asset polling, and the skyblock-data repo integration.
 ### Package Structure
 
 - **`config/`** - `@Configuration` beans:
-  - `PersistenceConfig` - one-liner bean delegating to `MinecraftApi.connectSkyBlockSession(JpaCacheProvider.HAZELCAST_CLIENT)`,
-    which preserves every locked-correct setting (H2 in-memory driver, schema `"skyblock"`, the
-    registered `SkyBlockFactory`, `GsonSettings.StringType.DEFAULT` mutation, query cache, second-level
-    cache, `READ_WRITE` concurrency, `CREATE_WARN` missing-cache strategy, 30-second query TTL) and
-    varies only the cache provider. The Hazelcast client config is loaded from
-    `src/main/resources/hazelcast-client.xml` (which must stay in sync with
-    `infra/hazelcast/hazelcast-client.xml`).
+  - `PersistenceConfig` - wires two `JpaSession` beans (`skyBlockSession` via
+    `RemoteSkyBlockFactory` + `JpaCacheProvider.HAZELCAST_CLIENT`, and `assetSession` via
+    `JpaCacheProvider.EHCACHE`), plus the Phase 6b `skyBlockWriteHazelcastInstance` bean
+    (a second Hazelcast client alongside the JCache-managed instance used for direct
+    IQueue / IMap access on the write path). Registers the Phase 6b `remoteSkyBlockFactory`
+    bean that the write-path beans inject to iterate the `getWritableSources()` registry.
+  - `GitHubConfig` - wires three Feign clients against `api.github.com`: the read-path
+    `skyBlockDataClient` (`Accept: application/vnd.github.raw+json` for raw file bodies),
+    the Phase 6b write-path `skyBlockDataWriteClient` (`Accept: application/vnd.github+json`
+    for JSON envelopes + PUT), and the Phase 6b dormant `skyBlockGitDataClient` (same JSON
+    media type, surface only - no production callers). All three share the same
+    `skyBlockDataAuthorizationSupplier` so one PAT covers every path.
+
+- **`client/`** - Feign contract interfaces + DTOs:
+  - `SkyBlockDataContract` - read path (Contents API raw media type).
+  - `SkyBlockDataWriteContract` - Phase 6b write path (Contents API JSON media type + PUT).
+  - `SkyBlockGitDataContract` - Phase 6b dormant Git Data API surface (getRef, getCommit,
+    getTree, createBlob, createTree, createCommit, updateRef) shipped with DTO round-trip
+    tests but no production caller. Reserved for a future Phase 6e multi-file commit
+    coalescing path.
+
+- **`persistence/`** - `RemoteSkyBlockFactory` (wraps each model's source chain as
+  `WritableRemoteJsonSource(DiskOverlaySource(RemoteJsonSource(...)))` and exposes
+  `getWritableSources()` for the write-path beans) + `WritableRemoteJsonSource` (per-entity
+  buffer, `commitBatch` with manifest path resolution, 412 retry with blob SHA refetch,
+  escalation of failed mutations to the caller's retry queue).
+
+- **`poller/`** - Phase 4c `AssetPoller` watchdog + `AssetDiffEngine` + Phase 5.5
+  `RefreshTrigger` SAM for targeted refresh.
+
+- **`write/`** - Phase 6b write path:
+  - `BufferedMutation<T>` - in-memory record of a single pending mutation (operation,
+    hydrated entity, producer request id, buffered timestamp).
+  - `DelayedWriteRequest` - `BufferedMutation` + entity class + attempt counter + readyAt
+    instant, suitable for a `DelayQueue` exponential-backoff retry loop.
+  - `WriteQueueConsumer` - `@Component` daemon thread draining the `skyblock.writes`
+    Hazelcast IQueue and the local `DelayQueue<DelayedWriteRequest>` retry queue in
+    alternation. Dispatches fresh requests by deserializing the entity via the producer's
+    Gson payload and calling `source.buffer(mutation)`; re-dispatches retries by skipping
+    deserialization and directly buffering the pre-hydrated mutation. Dead-letters
+    exhausted retries to `skyblock.writes.deadletter` IMap for operator inspection.
+  - `WriteBatchScheduler` - `@Component` with `@Scheduled(fixedDelayString=10s)` that
+    iterates the `RemoteSkyBlockFactory.getWritableSources()` registry and calls
+    `commitBatch()` on each. Successful commits are one GitHub PUT per dirty source per
+    tick (Option A: per-file commits, not Git Data API multi-file). Failed commits are
+    escalated to the consumer's retry queue as `DelayedWriteRequest` entries.
+  - `SmokeWriteSentinel` - `@Profile("smoke")` bean that puts a single synthetic
+    `WriteRequest` on startup for gate-7 end-to-end docker testing. Emits a sentinel
+    `ZodiacEvent` with id `SBS_WRITE_SMOKE_TEST` and expects the operator to revert
+    the mutation after verification.
 
 ### Dependencies
 
@@ -68,11 +115,11 @@ GitHub asset polling, and the skyblock-data repo integration.
   `PersistenceConfig` delegates to.
 - **`spring-boot-starter`** - context, lifecycle, configuration.
 - **`spring-boot-starter-actuator`** - health and metrics endpoints (Phase 2c verification).
-- **`com.hazelcast:hazelcast` 5.6.0** (`runtimeOnly`) - Hazelcast Java client. The persistence
-  library declares this as `compileOnly`, so each consumer that opts into a `HAZELCAST_*`
-  provider must add the runtime dep itself. The matching `testRuntimeOnly` is required by
-  `JpaModelHazelcastTest` because Gradle's `runtimeOnly` does not cascade into
-  `testRuntimeClasspath`.
+- **`com.hazelcast:hazelcast` 5.6.0** (`implementation`) - Hazelcast Java client. Promoted
+  from `runtimeOnly` to `implementation` in Phase 6b because `PersistenceConfig`,
+  `WriteQueueConsumer`, and `WriteBatchScheduler` now reference direct Hazelcast symbols
+  (`HazelcastClient`, `HazelcastInstance`, `IQueue`, `IMap`). Earlier phases only used
+  Hazelcast indirectly through the JCache SPI so `runtimeOnly` was sufficient.
 
 ### Environment variables
 
