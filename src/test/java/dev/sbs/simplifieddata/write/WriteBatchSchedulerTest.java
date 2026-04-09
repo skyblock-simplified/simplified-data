@@ -74,7 +74,7 @@ class WriteBatchSchedulerTest {
     @Test
     @DisplayName("tick with an empty writable source registry is a no-op")
     void tickEmptyRegistry() {
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, 1L);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
 
         scheduler.tick();
 
@@ -88,7 +88,7 @@ class WriteBatchSchedulerTest {
         source.nextResult = WritableRemoteJsonSource.CommitBatchResult.success(2, "abc123");
         this.factory.register(ZodiacEvent.class, source);
 
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, 1L);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
         scheduler.tick();
 
         assertThat(source.commitCount, equalTo(1));
@@ -104,7 +104,7 @@ class WriteBatchSchedulerTest {
         source.nextResult = buildFailed(List.of(m1, m2));
         this.factory.register(ZodiacEvent.class, source);
 
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, 1L);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
         scheduler.tick();
 
         assertThat(this.consumer.getRetries(), hasSize(2));
@@ -129,7 +129,7 @@ class WriteBatchSchedulerTest {
         badSource.nextResult = buildFailed(List.of(newOtherMutation()));
         this.factory.register(OtherModel.class, badSource);
 
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, 1L);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
         scheduler.tick();
 
         assertThat(okSource.commitCount, equalTo(1));
@@ -145,7 +145,7 @@ class WriteBatchSchedulerTest {
         source.nextResult = buildFailed(List.of(newMutation(WriteRequest.Operation.UPSERT, "A")));
         this.factory.register(ZodiacEvent.class, source);
 
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, 1L);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
         scheduler.flushOnShutdown();
 
         assertThat(source.commitCount, equalTo(1));
@@ -162,7 +162,7 @@ class WriteBatchSchedulerTest {
         other.nextResult = WritableRemoteJsonSource.CommitBatchResult.success(1, "xyz");
         this.factory.register(OtherModel.class, other);
 
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, 1L);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
         scheduler.tick();
 
         assertThat(throwing.commitCount, equalTo(1));
@@ -170,11 +170,148 @@ class WriteBatchSchedulerTest {
         assertThat(this.consumer.getRetries(), is(empty()));
     }
 
+    // --- GIT_DATA mode tests --- //
+
+    @Test
+    @DisplayName("GIT_DATA tick with empty registry is a no-op and never invokes the commit service")
+    void gitDataTickEmpty() {
+        CapturingGitDataService capturing = new CapturingGitDataService();
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, 1L, WriteMode.GIT_DATA);
+
+        scheduler.tick();
+
+        assertThat(capturing.commitCalls, hasSize(0));
+        assertThat(this.consumer.getRetries(), is(empty()));
+    }
+
+    @Test
+    @DisplayName("GIT_DATA tick stages dirty sources then calls commit() once with merged request")
+    void gitDataTickMergesSources() {
+        StagingRecordingSource<ZodiacEvent> zodiac = new StagingRecordingSource<>(ZodiacEvent.class);
+        zodiac.nextStaged = newStagedBatch(ZodiacEvent.class, "data/v1/world/zodiac_events.json", 2);
+        this.factory.register(ZodiacEvent.class, zodiac);
+
+        StagingRecordingSource<OtherModel> other = new StagingRecordingSource<>(OtherModel.class);
+        other.nextStaged = newStagedBatch(OtherModel.class, "data/v1/other/other.json", 3);
+        this.factory.register(OtherModel.class, other);
+
+        CapturingGitDataService capturing = new CapturingGitDataService();
+        capturing.nextResult = GitDataCommitResult.success("commitsha");
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, 1L, WriteMode.GIT_DATA);
+
+        scheduler.tick();
+
+        assertThat(capturing.commitCalls, hasSize(1));
+        BatchCommitRequest merged = capturing.commitCalls.get(0);
+        assertThat(merged.getDirtyFileCount(), equalTo(2));
+        assertThat(merged.getTotalMutationCount(), equalTo(5));
+        assertThat(this.consumer.getRetries(), is(empty()));
+    }
+
+    @Test
+    @DisplayName("GIT_DATA tick escalates every mutation from every source when the commit service returns failure")
+    void gitDataTickEscalatesOnFailure() {
+        StagingRecordingSource<ZodiacEvent> zodiac = new StagingRecordingSource<>(ZodiacEvent.class);
+        zodiac.nextStaged = newStagedBatch(ZodiacEvent.class, "data/v1/world/zodiac_events.json", 2);
+        this.factory.register(ZodiacEvent.class, zodiac);
+
+        StagingRecordingSource<OtherModel> other = new StagingRecordingSource<>(OtherModel.class);
+        other.nextStaged = newStagedBatch(OtherModel.class, "data/v1/other/other.json", 3);
+        this.factory.register(OtherModel.class, other);
+
+        CapturingGitDataService capturing = new CapturingGitDataService();
+        capturing.nextResult = GitDataCommitResult.failure(new RuntimeException("simulated Git Data failure"));
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, 1L, WriteMode.GIT_DATA);
+
+        scheduler.tick();
+
+        assertThat(capturing.commitCalls, hasSize(1));
+        // 2 ZodiacEvent mutations + 3 OtherModel mutations = 5 retry entries.
+        assertThat(this.consumer.getRetries(), hasSize(5));
+    }
+
+    @Test
+    @DisplayName("GIT_DATA tick skips empty StagedBatches without invoking commit()")
+    void gitDataTickSkipsEmptyStagedBatches() {
+        StagingRecordingSource<ZodiacEvent> zodiac = new StagingRecordingSource<>(ZodiacEvent.class);
+        zodiac.nextStaged = StagedBatch.empty();
+        this.factory.register(ZodiacEvent.class, zodiac);
+
+        CapturingGitDataService capturing = new CapturingGitDataService();
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, 1L, WriteMode.GIT_DATA);
+
+        scheduler.tick();
+
+        assertThat(capturing.commitCalls, hasSize(0));
+    }
+
+    @Test
+    @DisplayName("GIT_DATA flushOnShutdown drops failures instead of escalating them")
+    void gitDataFlushDropsFailures() {
+        StagingRecordingSource<ZodiacEvent> zodiac = new StagingRecordingSource<>(ZodiacEvent.class);
+        zodiac.nextStaged = newStagedBatch(ZodiacEvent.class, "data/v1/world/zodiac_events.json", 2);
+        this.factory.register(ZodiacEvent.class, zodiac);
+
+        CapturingGitDataService capturing = new CapturingGitDataService();
+        capturing.nextResult = GitDataCommitResult.failure(new RuntimeException("simulated failure"));
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, 1L, WriteMode.GIT_DATA);
+
+        scheduler.flushOnShutdown();
+
+        assertThat(capturing.commitCalls, hasSize(1));
+        assertThat(this.consumer.getRetries(), is(empty()));
+    }
+
     // --- helpers --- //
+
+    /**
+     * Stub GitDataCommitService that throws if any commit() call reaches it.
+     * Used by the legacy CONTENTS-mode tests which should never dispatch
+     * through the git-data path.
+     */
+    private static @NotNull GitDataCommitService stubGitDataService() {
+        SkyBlockGitDataContractStub contractStub = new SkyBlockGitDataContractStub();
+        return new GitDataCommitService(contractStub, 3) {
+            @Override
+            public @NotNull GitDataCommitResult commit(@NotNull BatchCommitRequest request) {
+                throw new UnsupportedOperationException(
+                    "stubGitDataService.commit() reached from CONTENTS-mode test - unexpected dispatch"
+                );
+            }
+        };
+    }
 
     private static @NotNull BufferedMutation<ZodiacEvent> newMutation(@NotNull WriteRequest.Operation op, @NotNull String id) {
         ZodiacEvent event = new ZodiacEvent();
         return new BufferedMutation<>(op, event, UUID.randomUUID(), Instant.now());
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static <T extends JpaModel> @NotNull StagedBatch<T> newStagedBatch(
+        @NotNull Class<T> modelClass,
+        @NotNull String path,
+        int mutationCount
+    ) {
+        dev.simplified.collection.ConcurrentMap<String, ConcurrentList<T>> fileSnapshots = Concurrent.newMap();
+        ConcurrentList<T> entities = Concurrent.newList();
+        fileSnapshots.put(path, entities);
+
+        ConcurrentList<BufferedMutation<T>> mutations = Concurrent.newList();
+        for (int i = 0; i < mutationCount; i++) {
+            T instance = instantiate(modelClass);
+            mutations.add(new BufferedMutation<>(WriteRequest.Operation.UPSERT, instance, UUID.randomUUID(), Instant.now()));
+        }
+
+        return new StagedBatch<>(modelClass, fileSnapshots, mutations, mutationCount);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends JpaModel> @NotNull T instantiate(@NotNull Class<T> type) {
+        try {
+            return type.getDeclaredConstructor().newInstance();
+        } catch (Exception ex) {
+            throw new RuntimeException(ex);
+        }
     }
 
     private static @NotNull BufferedMutation<OtherModel> newOtherMutation() {
@@ -253,6 +390,7 @@ class WriteBatchSchedulerTest {
             super(
                 new NoopDelegate<>(),
                 new ThrowingContract(),
+                new ThrowingFileFetcher(),
                 new EmptyIndexProvider(),
                 MinecraftApi.getGson(),
                 "stub-" + modelClass.getSimpleName(),
@@ -279,6 +417,60 @@ class WriteBatchSchedulerTest {
         public @NotNull CommitBatchResult commitBatch() {
             this.commitCount++;
             throw new IllegalStateException("simulated commitBatch failure");
+        }
+
+    }
+
+    /**
+     * Stand-in for {@link WritableRemoteJsonSource} whose {@code stageBatch()}
+     * returns a pre-computed {@link StagedBatch}. Used by the GIT_DATA mode
+     * tests to drive the scheduler's staging phase without exercising the
+     * real manifest/file fetcher plumbing.
+     */
+    private static final class StagingRecordingSource<T extends JpaModel> extends WritableRemoteJsonSource<T> {
+
+        @NotNull StagedBatch<T> nextStaged = StagedBatch.empty();
+        int stageCount = 0;
+
+        StagingRecordingSource(@NotNull Class<T> modelClass) {
+            super(
+                new NoopDelegate<>(),
+                new ThrowingContract(),
+                new ThrowingFileFetcher(),
+                new EmptyIndexProvider(),
+                MinecraftApi.getGson(),
+                "staging-" + modelClass.getSimpleName(),
+                modelClass,
+                3
+            );
+        }
+
+        @Override
+        public @NotNull StagedBatch<T> stageBatch() {
+            this.stageCount++;
+            return this.nextStaged;
+        }
+
+    }
+
+    /**
+     * Stand-in for {@link GitDataCommitService} that records every
+     * {@link #commit(BatchCommitRequest)} call and returns a pre-configured
+     * {@link GitDataCommitResult}.
+     */
+    private static final class CapturingGitDataService extends GitDataCommitService {
+
+        final List<BatchCommitRequest> commitCalls = new ArrayList<>();
+        @NotNull GitDataCommitResult nextResult = GitDataCommitResult.success("stub-commit-sha");
+
+        CapturingGitDataService() {
+            super(new SkyBlockGitDataContractStub(), 3);
+        }
+
+        @Override
+        public @NotNull GitDataCommitResult commit(@NotNull BatchCommitRequest request) {
+            this.commitCalls.add(request);
+            return this.nextResult;
         }
 
     }
@@ -330,6 +522,15 @@ class WriteBatchSchedulerTest {
 
     }
 
+    private static final class ThrowingFileFetcher implements dev.simplified.persistence.source.FileFetcher {
+
+        @Override
+        public @NotNull String fetchFile(@NotNull String path) {
+            throw new UnsupportedOperationException("FileFetcher stub should not be invoked");
+        }
+
+    }
+
     private static final class EmptyIndexProvider implements IndexProvider {
 
         @Override
@@ -348,6 +549,54 @@ class WriteBatchSchedulerTest {
 
         @Override
         public @NotNull GitHubPutResponse putFileContent(@NotNull String path, @NotNull PutContentRequest body) throws SkyBlockDataException {
+            throw new UnsupportedOperationException();
+        }
+
+    }
+
+    /**
+     * Minimal {@link dev.sbs.simplifieddata.client.SkyBlockGitDataContract}
+     * stub that throws on every method. Only used by the
+     * {@link #stubGitDataService()} helper to satisfy the
+     * {@link GitDataCommitService} constructor parameter in legacy
+     * CONTENTS-mode tests. Never actually invoked because the
+     * {@link GitDataCommitService} subclass override intercepts all
+     * {@link GitDataCommitService#commit} calls.
+     */
+    private static final class SkyBlockGitDataContractStub implements dev.sbs.simplifieddata.client.SkyBlockGitDataContract {
+
+        @Override
+        public dev.sbs.simplifieddata.client.response.@NotNull GitRef getRef(@NotNull String branch) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public dev.sbs.simplifieddata.client.response.@NotNull GitCommit getCommit(@NotNull String sha) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public dev.sbs.simplifieddata.client.response.@NotNull GitTree getTree(@NotNull String sha, @NotNull String recursive) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public dev.sbs.simplifieddata.client.response.@NotNull GitBlob createBlob(dev.sbs.simplifieddata.client.request.@NotNull CreateBlobRequest body) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public dev.sbs.simplifieddata.client.response.@NotNull GitTree createTree(dev.sbs.simplifieddata.client.request.@NotNull CreateTreeRequest body) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public dev.sbs.simplifieddata.client.response.@NotNull GitCommit createCommit(dev.sbs.simplifieddata.client.request.@NotNull CreateCommitRequest body) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public dev.sbs.simplifieddata.client.response.@NotNull GitRef updateRef(@NotNull String branch, dev.sbs.simplifieddata.client.request.@NotNull UpdateRefRequest body) {
             throw new UnsupportedOperationException();
         }
 

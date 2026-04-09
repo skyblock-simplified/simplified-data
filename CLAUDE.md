@@ -43,7 +43,8 @@ GitHub asset polling, and the skyblock-data repo integration.
 | 5.5.1 | done | Deleted obsolete Phase 4b ETagContext workaround after `Simplified-Dev/client` auto-attaches `If-None-Match` and transparently serves cached bodies on 304. Net -160 lines across GitHubConfig, AssetPoller, SkyBlockDataException, AssetPollerTest. |
 | 5.5.2 | done | Hotfix: switch `SkyBlockDataContract.getLatestMasterCommit` from `/commits?sha=master&per_page=1` (stale edge cache, observed 10+ min lag) to `/commits/master` (always fresh via git ref path). Return type collapsed to single `GitHubCommit`. Phase 5.5 gate-6 end-to-end verified live against docker. |
 | 6a | done | `WriteRequest` envelope class + 9 unit tests in `Simplified-Dev/persistence`. Plain Java `Serializable`, pre-serialized `entityJson`, `UPSERT`/`DELETE` nested enum. Library foundation for the IQueue write path. |
-| 6b | done | **Write path wiring**: `WritableRemoteJsonSource<T>` wraps the `DiskOverlaySource(RemoteJsonSource)` chain and layers GitHub Contents API PUT on top. `SkyBlockDataWriteContract` + new DTOs + separate `skyBlockDataWriteClient` bean with `Accept: application/vnd.github+json`. `WriteQueueConsumer` daemon thread drains `skyblock.writes` IQueue + a local `DelayQueue<DelayedWriteRequest>` for exponential-backoff retries; dead-letter to `skyblock.writes.deadletter` IMap after 5 attempts. `WriteBatchScheduler` fires every 10s and escalates failures to the consumer's retry queue. `skyBlockWriteHazelcastInstance` bean in `PersistenceConfig` (second client alongside the JCache-managed instance). `RemoteSkyBlockFactory` wraps every per-model source in a `WritableRemoteJsonSource` and exposes a typed `getWritableSources()` registry for the write-path beans. `SmokeWriteSentinel` bean activated under `@Profile("smoke")` for gate-7 end-to-end docker testing. Dormant `SkyBlockGitDataContract` + 8 Git Data API DTOs shipped as an extractable API surface with compile-only DTO round-trip tests - no production caller in Phase 6b, reserved for a future Phase 6e multi-file commit coalescing path. |
+| 6b | done | **Write path wiring**: `WritableRemoteJsonSource<T>` wraps the `DiskOverlaySource(RemoteJsonSource)` chain and layers GitHub Contents API PUT on top. `SkyBlockDataWriteContract` + new DTOs + separate `skyBlockDataWriteClient` bean with `Accept: application/vnd.github+json`. `WriteQueueConsumer` daemon thread drains `skyblock.writes` IQueue + a local `DelayQueue<DelayedWriteRequest>` for exponential-backoff retries; dead-letter to `skyblock.writes.deadletter` IMap after 5 attempts. `WriteBatchScheduler` fires every 10s and escalates failures to the consumer's retry queue. `skyBlockWriteHazelcastInstance` bean in `PersistenceConfig` (second client alongside the JCache-managed instance). `RemoteSkyBlockFactory` wraps every per-model source in a `WritableRemoteJsonSource` and exposes a typed `getWritableSources()` registry for the write-path beans. `SmokeWriteSentinel` bean activated under `@Profile("smoke")` for gate-7 end-to-end docker testing. Dormant `SkyBlockGitDataContract` + 8 Git Data API DTOs shipped as an extractable API surface with compile-only DTO round-trip tests - no production caller in Phase 6b, reserved for Phase 6b.1. |
+| 6b.1 | done | **Git Data API production path + dual-file routing**: `WritableRemoteJsonSource.stageBatch()` new two-phase commit entry point that reads both primary and `_extra` files via `FileFetcher`, routes mutations to the owning file by id (extras wins on conflict, new ids default to primary, deletes remove from owner), and returns a `StagedBatch` with only the files that actually changed (suppresses byte-identical no-ops). `GitDataCommitService` (@Component) orchestrates the 7-step Git Data API flow (getRef → getCommit → createBlob*N → createTree(base_tree) → createCommit → updateRef) with 3 immediate retries on 409/422 non-fast-forward before escalating. `WriteBatchScheduler.tick()` now dispatches on the new `skyblock.data.github.write-mode` property: `GIT_DATA` (default) uses a two-phase staging + single-commit path that produces exactly one commit per tick across every dirty file on every source; `CONTENTS` retains the Phase 6b per-file commit path as an operational fallback. Commit message in GIT_DATA mode matches the original Q4 format: `"Batch update: <N> entities across <M> files"` header with per-entity-class breakdown in the body. Fixes the items_extra.json routing bug that Phase 6b had flagged as a known limitation. |
 | 6c | future | simplified-bot producer SDK (`WriteDispatcher` service bean) - speculatively ship without concrete write triggers |
 | 6d | future | Operator runbook: `SKYBLOCK_DATA_GITHUB_TOKEN` upgraded to `contents:write` scope |
 | 7 | future | Delete the 42 resource JSONs from `minecraft-api/src/main/resources/skyblock/` |
@@ -86,9 +87,25 @@ GitHub asset polling, and the skyblock-data repo integration.
 - **`poller/`** - Phase 4c `AssetPoller` watchdog + `AssetDiffEngine` + Phase 5.5
   `RefreshTrigger` SAM for targeted refresh.
 
-- **`write/`** - Phase 6b write path:
+- **`write/`** - Phase 6b / 6b.1 write path:
+  - `WriteMode` - enum `{GIT_DATA, CONTENTS}` controlling the `WriteBatchScheduler.tick()`
+    dispatch. Phase 6b.1 default is `GIT_DATA`; `CONTENTS` is the Phase 6b per-file
+    commit path retained as operational fallback.
   - `BufferedMutation<T>` - in-memory record of a single pending mutation (operation,
     hydrated entity, producer request id, buffered timestamp).
+  - `StagedBatch<T>` - per-source output of `WritableRemoteJsonSource.stageBatch()`.
+    Carries the dirty-file snapshot map (repo-root-relative path → mutated entity list)
+    and the list of mutations that drove the staging. Empty batches are silently ignored
+    by the scheduler.
+  - `BatchCommitRequest` - cross-source aggregation of every non-empty `StagedBatch` in
+    a scheduler tick. Merges into a single `Map<String, String>` of file path → new
+    UTF-8 body, plus the list of contributing `StagedBatch` instances for dead-letter
+    escalation.
+  - `GitDataCommitService` - `@Component` orchestrating the 7-step Git Data API flow
+    (`getRef` → `getCommit` → `createBlob` × N → `createTree(base_tree)` → `createCommit`
+    → `updateRef`). 3 immediate retries on 409/422 non-fast-forward, escalate to backoff
+    otherwise. Returns a `GitDataCommitResult` (success with new commit SHA, or failure
+    with root cause).
   - `DelayedWriteRequest` - `BufferedMutation` + entity class + attempt counter + readyAt
     instant, suitable for a `DelayQueue` exponential-backoff retry loop.
   - `WriteQueueConsumer` - `@Component` daemon thread draining the `skyblock.writes`
@@ -98,10 +115,14 @@ GitHub asset polling, and the skyblock-data repo integration.
     deserialization and directly buffering the pre-hydrated mutation. Dead-letters
     exhausted retries to `skyblock.writes.deadletter` IMap for operator inspection.
   - `WriteBatchScheduler` - `@Component` with `@Scheduled(fixedDelayString=10s)` that
-    iterates the `RemoteSkyBlockFactory.getWritableSources()` registry and calls
-    `commitBatch()` on each. Successful commits are one GitHub PUT per dirty source per
-    tick (Option A: per-file commits, not Git Data API multi-file). Failed commits are
-    escalated to the consumer's retry queue as `DelayedWriteRequest` entries.
+    dispatches on `WriteMode`:
+    - `GIT_DATA` (default): phase A stages every dirty source, phase B merges into a
+      `BatchCommitRequest` and hands it to `GitDataCommitService` for a single atomic
+      commit spanning every dirty file. Matches the original Q4 commit message format.
+    - `CONTENTS` (fallback): iterates sources and calls `commitBatch()` on each,
+      producing one Contents API PUT commit per dirty source per tick.
+    Failed mutations escalate to the consumer's retry queue as `DelayedWriteRequest`
+    entries with `attempt=1` and the configured exponential-backoff initial delay.
   - `SmokeWriteSentinel` - `@Profile("smoke")` bean that puts a single synthetic
     `WriteRequest` on startup for gate-7 end-to-end docker testing. Emits a sentinel
     `ZodiacEvent` with id `SBS_WRITE_SMOKE_TEST` and expects the operator to revert
