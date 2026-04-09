@@ -41,6 +41,7 @@ GitHub asset polling, and the skyblock-data repo integration.
 | 5 | done | Switch SkyBlock repositories to RemoteSkyBlockFactory (DiskOverlaySource + RemoteJsonSource) |
 | 5.5 | done | AssetPoller targeted refresh trigger via `RefreshTrigger` SAM + `JpaSession.refreshModels` library API. Changes propagate on the next 60s poll instead of waiting for restart. |
 | 5.5.1 | done | Deleted obsolete Phase 4b ETagContext workaround after `Simplified-Dev/client` auto-attaches `If-None-Match` and transparently serves cached bodies on 304. Net -160 lines across GitHubConfig, AssetPoller, SkyBlockDataException, AssetPollerTest. |
+| 5.5.2 | done | Hotfix: switch `SkyBlockDataContract.getLatestMasterCommit` from `/commits?sha=master&per_page=1` (stale edge cache, observed 10+ min lag) to `/commits/master` (always fresh via git ref path). Return type collapsed to single `GitHubCommit`. Phase 5.5 gate-6 end-to-end verified live against docker. |
 | 6 | future | IQueue write consumer (skyblock.writes) |
 
 ### Entry Point
