@@ -3,7 +3,10 @@ package dev.sbs.simplifieddata.config;
 import com.google.gson.Gson;
 import dev.sbs.minecraftapi.MinecraftApi;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
+import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
+import dev.sbs.simplifieddata.client.SkyBlockGitDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
+import dev.sbs.simplifieddata.client.request.PutContentRequest;
 import dev.sbs.simplifieddata.source.GitHubFileFetcher;
 import dev.sbs.simplifieddata.source.GitHubIndexProvider;
 import dev.simplified.client.Client;
@@ -78,6 +81,13 @@ public class GitHubConfig {
 
     /** The {@code Accept} media type required by the Contents endpoint for files above 1 MB. */
     private static final @NotNull String GITHUB_RAW_ACCEPT = "application/vnd.github.raw+json";
+
+    /**
+     * The default GitHub JSON media type used by the Phase 6b write-path client. Returns the
+     * JSON envelope from {@code GET /contents/{path}} (with the blob {@code sha} field needed
+     * as the optimistic-concurrency token for {@code PUT}) rather than the raw file body.
+     */
+    private static final @NotNull String GITHUB_JSON_ACCEPT = "application/vnd.github+json";
 
     /**
      * Builds the dynamic supplier of the {@code Authorization} header value from the
@@ -160,6 +170,130 @@ public class GitHubConfig {
 
         log.info("Building SkyBlockDataContract client against api.github.com");
         return Client.create(options);
+    }
+
+    /**
+     * Builds the Phase 6b write-path {@link Client} for
+     * {@link SkyBlockDataWriteContract}.
+     *
+     * <p>Structurally identical to {@link #skyBlockDataClient} except for the static
+     * {@code Accept} header: the write-path client requests
+     * {@code application/vnd.github+json} so the Contents API {@code GET} endpoint
+     * returns the JSON envelope (including the blob {@code sha} field) and the
+     * {@code PUT} endpoint accepts a standard JSON body. Merging the write path
+     * onto the existing read-path client would attach two {@code Accept} headers
+     * to every request ({@code Client.buildInternalClient()} adds static client
+     * headers via {@code request.addHeader(...)}, which is additive rather than
+     * replacing), producing brittle content-negotiation behavior.
+     *
+     * <p>Shares the same {@code skyBlockDataAuthorizationSupplier} bean with the
+     * read-path client so a single PAT resolves both contracts' auth. The
+     * {@code If-None-Match} auto-attach pipeline introduced in Phase 5.5.1 is
+     * inherited transparently - the framework's
+     * {@code InternalRequestInterceptor} auto-attaches the header on every
+     * {@code GET} on this client as well.
+     *
+     * <p>{@code If-None-Match} is not auto-attached on the write client's
+     * {@code PUT} calls because
+     * {@code InternalRequestInterceptor.attachIfNoneMatch} restricts itself to
+     * {@code GET}/{@code HEAD} methods - mutating calls never get surprise
+     * optimistic-concurrency enforcement via the auto-attach path. The Phase 6b
+     * retry path manages its own blob SHA explicitly through the
+     * {@link PutContentRequest#getSha()} field of the body.
+     *
+     * @param skyBlockDataAuthorizationSupplier the dynamic {@code Authorization} supplier,
+     *                                          shared with the read-path client
+     * @return the write-path client wrapper
+     */
+    @Bean
+    public @NotNull Client<SkyBlockDataWriteContract> skyBlockDataWriteClient(
+        @Qualifier("skyBlockDataAuthorizationSupplier") @NotNull Supplier<Optional<String>> skyBlockDataAuthorizationSupplier
+    ) {
+        Gson gson = MinecraftApi.getGson();
+
+        ClientOptions<SkyBlockDataWriteContract> options = ClientOptions.builder(SkyBlockDataWriteContract.class, gson)
+            .withHeader("Accept", GITHUB_JSON_ACCEPT)
+            .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
+            .withDynamicHeader("Authorization", skyBlockDataAuthorizationSupplier)
+            .withErrorDecoder((methodKey, response) -> {
+                throw new SkyBlockDataException(methodKey, response);
+            })
+            .build();
+
+        log.info("Building SkyBlockDataWriteContract client against api.github.com (Accept: {})", GITHUB_JSON_ACCEPT);
+        return Client.create(options);
+    }
+
+    /**
+     * Unwraps the Phase 6b write-path client's contract proxy as a standalone bean so
+     * that {@code WritableRemoteJsonSource} and the Phase 6b write-path beans do not
+     * need to depend on the {@code final} {@link Client} type directly. Matches the
+     * {@code skyBlockDataContract} pattern on {@link dev.sbs.simplifieddata.config.PersistenceConfig}.
+     *
+     * @param skyBlockDataWriteClient the write-path client wrapper
+     * @return the unwrapped {@link SkyBlockDataWriteContract} proxy
+     */
+    @Bean
+    public @NotNull SkyBlockDataWriteContract skyBlockDataWriteContract(
+        @NotNull Client<SkyBlockDataWriteContract> skyBlockDataWriteClient
+    ) {
+        return skyBlockDataWriteClient.getContract();
+    }
+
+    /**
+     * Builds the dormant Phase 6b {@link Client} for
+     * {@link SkyBlockGitDataContract} - the extractable Git Data API surface.
+     *
+     * <p>Structurally identical to {@link #skyBlockDataWriteClient} (same
+     * {@code Accept: application/vnd.github+json}, same API version header,
+     * same auth supplier) because the Git Data API accepts the same JSON
+     * media type and the same PAT. No production code path reads or writes
+     * through this client in Phase 6b - it is shipped purely as an
+     * extractable API surface for future initiatives (Phase 6e multi-file
+     * commit coalescing; downstream project extraction).
+     *
+     * <p>The bean is eagerly constructed at context refresh so the Feign
+     * proxy validation runs at boot: any broken {@code @RequestLine}
+     * template on {@link SkyBlockGitDataContract} fails fast rather than
+     * surfacing at first use. Network I/O still does not happen until a
+     * contract method is invoked.
+     *
+     * @param skyBlockDataAuthorizationSupplier the dynamic {@code Authorization} supplier,
+     *                                          shared with both other GitHub clients
+     * @return the Git Data API client wrapper
+     */
+    @Bean
+    public @NotNull Client<SkyBlockGitDataContract> skyBlockGitDataClient(
+        @Qualifier("skyBlockDataAuthorizationSupplier") @NotNull Supplier<Optional<String>> skyBlockDataAuthorizationSupplier
+    ) {
+        Gson gson = MinecraftApi.getGson();
+
+        ClientOptions<SkyBlockGitDataContract> options = ClientOptions.builder(SkyBlockGitDataContract.class, gson)
+            .withHeader("Accept", GITHUB_JSON_ACCEPT)
+            .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
+            .withDynamicHeader("Authorization", skyBlockDataAuthorizationSupplier)
+            .withErrorDecoder((methodKey, response) -> {
+                throw new SkyBlockDataException(methodKey, response);
+            })
+            .build();
+
+        log.info("Building SkyBlockGitDataContract client against api.github.com (dormant write surface)");
+        return Client.create(options);
+    }
+
+    /**
+     * Unwraps the dormant Git Data client's contract proxy as a standalone
+     * bean. Matches the {@code skyBlockDataContract} / {@code skyBlockDataWriteContract}
+     * pattern.
+     *
+     * @param skyBlockGitDataClient the Git Data API client wrapper
+     * @return the unwrapped {@link SkyBlockGitDataContract} proxy
+     */
+    @Bean
+    public @NotNull SkyBlockGitDataContract skyBlockGitDataContract(
+        @NotNull Client<SkyBlockGitDataContract> skyBlockGitDataClient
+    ) {
+        return skyBlockGitDataClient.getContract();
     }
 
     /**

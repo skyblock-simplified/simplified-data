@@ -39,12 +39,13 @@ dependencies {
     implementation(libs.spring.boot.starter)
     implementation(libs.spring.boot.starter.actuator)
 
-    // Hazelcast - this module opts into JpaCacheProvider.HAZELCAST_CLIENT, so the
-    // persistence library's compileOnly Hazelcast dep must be promoted to runtimeOnly here.
-    // The testRuntimeOnly mirror is required by JpaModelHazelcastTest (verification step 5.9)
-    // because Gradle's runtimeOnly does NOT cascade into testRuntimeClasspath by default.
-    runtimeOnly(libs.hazelcast)
-    testRuntimeOnly(libs.hazelcast)
+    // Hazelcast - promoted from runtimeOnly to implementation in Phase 6b because
+    // PersistenceConfig now references HazelcastInstance + HazelcastClient directly
+    // for the write-path bean, the WriteQueueConsumer uses IQueue<WriteRequest>
+    // as its drain entry point, and the WriteBatchScheduler iterates the registry
+    // via an IMap for the dead-letter dump. Earlier phases only used Hazelcast
+    // indirectly through the JCache SPI which is why runtimeOnly was sufficient.
+    implementation(libs.hazelcast)
 
     // Projects
     implementation("dev.sbs:minecraft-api:0.1.0")

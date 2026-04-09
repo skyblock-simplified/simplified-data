@@ -1,9 +1,15 @@
 package dev.sbs.simplifieddata.persistence;
 
+import com.google.gson.Gson;
 import dev.sbs.minecraftapi.MinecraftApi;
 import dev.sbs.minecraftapi.persistence.SkyBlockFactory;
 import dev.sbs.minecraftapi.persistence.model.Accessory;
 import dev.sbs.minecraftapi.persistence.model.Item;
+import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
+import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
+import dev.sbs.simplifieddata.client.request.PutContentRequest;
+import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
+import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.JpaModel;
@@ -51,42 +57,72 @@ final class RemoteSkyBlockFactoryTest {
         throw new JpaException("stub should not be invoked during wiring");
     };
 
+    /** Write contract stub that throws on every method - construction never calls GitHub. */
+    private static final @NotNull SkyBlockDataWriteContract THROWING_WRITE = new SkyBlockDataWriteContract() {
+
+        @Override
+        public @NotNull GitHubContentEnvelope getFileMetadata(@NotNull String path) throws SkyBlockDataException {
+            throw new IllegalStateException("write contract stub should not be invoked during wiring");
+        }
+
+        @Override
+        public @NotNull GitHubPutResponse putFileContent(@NotNull String path, @NotNull PutContentRequest body) throws SkyBlockDataException {
+            throw new IllegalStateException("write contract stub should not be invoked during wiring");
+        }
+
+    };
+
+    private static final @NotNull Gson GSON = MinecraftApi.getGson();
+
+    private static @NotNull RemoteSkyBlockFactory newFactory(@NotNull SkyBlockFactory delegate) {
+        return new RemoteSkyBlockFactory(
+            "skyblock-data", delegate, THROWING_INDEX, THROWING_FETCHER, THROWING_WRITE, GSON, OVERLAY_BASE, 3
+        );
+    }
+
     @Test
     void wiresEveryModelWithDiskOverlaySourceWrappingRemoteJsonSource() {
         SkyBlockFactory delegate = MinecraftApi.getSkyBlockFactory();
-        RemoteSkyBlockFactory factory = new RemoteSkyBlockFactory(
-            "skyblock-data", delegate, THROWING_INDEX, THROWING_FETCHER, OVERLAY_BASE
-        );
+        RemoteSkyBlockFactory factory = newFactory(delegate);
 
         assertThat(factory.getModels().size(), equalTo(delegate.getModels().size()));
         assertThat(factory.getModels().size(), greaterThanOrEqualTo(41));
         assertThat(factory.getDefaultSource(), nullValue());
         assertThat(factory.getPeeks().isEmpty(), equalTo(true));
+        assertThat(factory.getWritableSources().size(), equalTo(delegate.getModels().size()));
 
         for (Class<JpaModel> modelClass : delegate.getModels()) {
             Source<?> wired = factory.getSources().get(modelClass);
             assertThat("missing source for " + modelClass.getName(), wired, notNullValue());
-            assertThat(wired, instanceOf(DiskOverlaySource.class));
+            assertThat(wired, instanceOf(WritableRemoteJsonSource.class));
 
-            DiskOverlaySource<?> overlay = (DiskOverlaySource<?>) wired;
+            WritableRemoteJsonSource<?> writable = (WritableRemoteJsonSource<?>) wired;
+            assertThat(writable.getSourceId(), equalTo("skyblock-data"));
+            assertThat(writable.getModelClass(), equalTo((Class) modelClass));
+            assertThat(writable.getDelegate(), instanceOf(DiskOverlaySource.class));
+
+            DiskOverlaySource<?> overlay = (DiskOverlaySource<?>) writable.getDelegate();
             assertThat(overlay.getInner(), instanceOf(RemoteJsonSource.class));
             assertThat(overlay.getModelClass(), equalTo((Class) modelClass));
 
             RemoteJsonSource<?> remote = (RemoteJsonSource<?>) overlay.getInner();
             assertThat(remote.getSourceId(), equalTo("skyblock-data"));
             assertThat(remote.getModelClass(), equalTo((Class) modelClass));
+
+            // The writableSources registry must point at the same instance.
+            assertThat(factory.getWritableSources().get(modelClass), equalTo((WritableRemoteJsonSource) writable));
         }
     }
 
     @Test
     void keyedMapContainsKnownModelClasses() {
         SkyBlockFactory delegate = MinecraftApi.getSkyBlockFactory();
-        RemoteSkyBlockFactory factory = new RemoteSkyBlockFactory(
-            "skyblock-data", delegate, THROWING_INDEX, THROWING_FETCHER, OVERLAY_BASE
-        );
+        RemoteSkyBlockFactory factory = newFactory(delegate);
 
         assertThat(factory.getSources(), hasKey(Item.class));
         assertThat(factory.getSources(), hasKey(Accessory.class));
+        assertThat(factory.getWritableSources(), hasKey(Item.class));
+        assertThat(factory.getWritableSources(), hasKey(Accessory.class));
     }
 
     @Test
@@ -104,7 +140,7 @@ final class RemoteSkyBlockFactoryTest {
 
         IllegalStateException ex = assertThrows(
             IllegalStateException.class,
-            () -> new RemoteSkyBlockFactory("skyblock-data", delegate, THROWING_INDEX, THROWING_FETCHER, OVERLAY_BASE)
+            () -> newFactory(delegate)
         );
 
         assertThat(ex.getMessage(), allOf(containsString("@Table"), containsString(UnannotatedModel.class.getName())));

@@ -1,8 +1,11 @@
 package dev.sbs.simplifieddata.config;
 
+import com.hazelcast.client.HazelcastClient;
+import com.hazelcast.core.HazelcastInstance;
 import dev.sbs.minecraftapi.MinecraftApi;
 import dev.sbs.minecraftapi.persistence.SkyBlockFactory;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
+import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.poller.LastResponseAccessor;
 import dev.sbs.simplifieddata.poller.RefreshTrigger;
@@ -20,6 +23,7 @@ import dev.simplified.persistence.source.FileFetcher;
 import dev.simplified.persistence.source.IndexProvider;
 import dev.simplified.util.Logging;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.log4j.Log4j2;
 import org.hibernate.annotations.CacheConcurrencyStrategy;
 import org.jetbrains.annotations.NotNull;
@@ -94,32 +98,51 @@ public class PersistenceConfig {
      * than reusing {@link MinecraftApi#getSessionManager()}. This matches the
      * {@link #assetSession()} pattern and keeps shutdown cleanly scoped to the Spring context.
      *
-     * @param gitHubIndexProvider the Phase 4b manifest index provider bean
-     * @param gitHubFileFetcher the Phase 4b raw-file fetcher bean
+     * <p>Phase 6b split the factory construction into a dedicated
+     * {@link #remoteSkyBlockFactory} bean so the
+     * {@link dev.sbs.simplifieddata.write.WriteQueueConsumer} and
+     * {@link dev.sbs.simplifieddata.write.WriteBatchScheduler} can inject the
+     * factory directly and iterate its
+     * {@link RemoteSkyBlockFactory#getWritableSources() writable source registry}
+     * without reaching back through the session.
+     *
+     * @param remoteSkyBlockFactory the Phase 6b factory bean wiring writable sources
      * @param overlayBasePath the base directory for {@link dev.simplified.persistence.source.DiskOverlaySource}
-     *                        lookups, resolved from {@code skyblock.data.overlay.path}
+     *                        lookups (logged for observability; actual path already
+     *                        consumed by {@link #remoteSkyBlockFactory})
      * @return the SkyBlock {@link JpaSession}
      */
     @Bean
-    public @NotNull JpaSession skyBlockSession(
+    public @NotNull RemoteSkyBlockFactory remoteSkyBlockFactory(
         @NotNull IndexProvider gitHubIndexProvider,
         @NotNull FileFetcher gitHubFileFetcher,
-        @Value("${skyblock.data.overlay.path:skyblock-data-overlay}") @NotNull String overlayBasePath
+        @NotNull SkyBlockDataWriteContract skyBlockDataWriteContract,
+        @Value("${skyblock.data.overlay.path:skyblock-data-overlay}") @NotNull String overlayBasePath,
+        @Value("${skyblock.data.github.write-412-immediate-retries:3}") int max412ImmediateRetries
     ) {
         SkyBlockFactory skyBlockFactory = MinecraftApi.getSkyBlockFactory();
-        RepositoryFactory remoteFactory = new RemoteSkyBlockFactory(
+        return new RemoteSkyBlockFactory(
             GitHubConfig.SOURCE_ID,
             skyBlockFactory,
             gitHubIndexProvider,
             gitHubFileFetcher,
-            Path.of(overlayBasePath)
+            skyBlockDataWriteContract,
+            MinecraftApi.getGson(),
+            Path.of(overlayBasePath),
+            max412ImmediateRetries
         );
+    }
 
+    @Bean
+    public @NotNull JpaSession skyBlockSession(
+        @NotNull RemoteSkyBlockFactory remoteSkyBlockFactory,
+        @Value("${skyblock.data.overlay.path:skyblock-data-overlay}") @NotNull String overlayBasePath
+    ) {
         JpaConfig config = JpaConfig.builder()
             .withDriver(new H2MemoryDriver())
             .withSchema("skyblock")
             .withCacheProvider(JpaCacheProvider.HAZELCAST_CLIENT)
-            .withRepositoryFactory(remoteFactory)
+            .withRepositoryFactory(remoteSkyBlockFactory)
             .withGsonSettings(
                 MinecraftApi.getServiceManager()
                     .get(GsonSettings.class)
@@ -217,6 +240,67 @@ public class PersistenceConfig {
     @Bean
     public @NotNull RefreshTrigger skyBlockRefreshTrigger(@NotNull @Qualifier("skyBlockSession") JpaSession skyBlockSession) {
         return skyBlockSession::refreshModels;
+    }
+
+    /**
+     * Field carrying the Phase 6b write-path Hazelcast client so that
+     * {@link #shutdownWriteHazelcastInstance()} can close it on Spring
+     * context teardown. The field is populated by
+     * {@link #skyBlockWriteHazelcastInstance()}.
+     */
+    private volatile HazelcastInstance writeHazelcastInstance;
+
+    /**
+     * Constructs the Phase 6b write-path {@link HazelcastInstance} as a
+     * second Hazelcast client on top of the classpath
+     * {@code hazelcast-client.xml} configuration, alongside the JCache-managed
+     * instance inside the {@code skyBlockSession}'s Hibernate L2 region.
+     *
+     * <p>Option A from the Phase 6b Q1 locked decision - two client instances
+     * against the same cluster membership (cluster name {@code skyblock}).
+     * Slightly wasteful in connection count but the cleanest way to get a raw
+     * {@link HazelcastInstance} bean for direct IQueue / IMap access without
+     * coupling to the JCache provider's internal
+     * {@code CacheManager.unwrap(HazelcastInstance.class)} path (which would
+     * hard-bind the write path to the Hibernate L2 implementation detail).
+     *
+     * <p>Hazelcast supports multiple client instances per JVM natively -
+     * {@link HazelcastClient#newHazelcastClient()} uses
+     * {@code ClientConfig.load()} to discover the classpath XML the same way
+     * the JCache path does, and each call returns a fresh unique instance.
+     * Shutdown is managed via {@link #shutdownWriteHazelcastInstance()} so
+     * the connection pool is released cleanly on Spring context teardown.
+     *
+     * <p>The bean is named {@code skyBlockWriteHazelcastInstance} (not the
+     * bare {@code hazelcastInstance}) to make the purpose explicit and
+     * prevent accidental injection into unrelated beans.
+     *
+     * @return a fresh Hazelcast client instance connected to the
+     *         {@code skyblock} cluster
+     */
+    @Bean
+    public @NotNull HazelcastInstance skyBlockWriteHazelcastInstance() {
+        HazelcastInstance instance = HazelcastClient.newHazelcastClient();
+        this.writeHazelcastInstance = instance;
+        log.info(
+            "simplified-data write path: Hazelcast client '{}' connected to cluster '{}'",
+            instance.getName(), instance.getConfig().getClusterName()
+        );
+        return instance;
+    }
+
+    @PreDestroy
+    void shutdownWriteHazelcastInstance() {
+        HazelcastInstance instance = this.writeHazelcastInstance;
+
+        if (instance != null) {
+            try {
+                instance.shutdown();
+                log.info("simplified-data write path: Hazelcast client '{}' shut down cleanly", instance.getName());
+            } catch (Throwable ex) {
+                log.warn("simplified-data write path: Hazelcast client shutdown raised exception (ignored)", ex);
+            }
+        }
     }
 
     @PostConstruct
