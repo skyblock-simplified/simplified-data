@@ -17,6 +17,7 @@ import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.collection.ConcurrentMap;
 import dev.simplified.persistence.JpaModel;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -75,7 +76,7 @@ class GitDataCommitServiceTest {
     @Test
     @DisplayName("commit() on an empty request is a no-op and does not touch the network")
     void commitEmpty() {
-        GitDataCommitService service = new GitDataCommitService(this.contract, 3);
+        GitDataCommitService service = new GitDataCommitService(this.contract, new WriteMetrics(new SimpleMeterRegistry()), 3);
         BatchCommitRequest empty = BatchCommitRequest.builder().build();
 
         GitDataCommitResult result = service.commit(empty);
@@ -90,7 +91,7 @@ class GitDataCommitServiceTest {
     void commitSingleFile() {
         this.contract.queueHappyPath();
 
-        GitDataCommitService service = new GitDataCommitService(this.contract, 3);
+        GitDataCommitService service = new GitDataCommitService(this.contract, new WriteMetrics(new SimpleMeterRegistry()), 3);
         BatchCommitRequest request = buildRequest("data/v1/world/zodiac_events.json", "[{\"id\":\"A\"}]", 1);
 
         GitDataCommitResult result = service.commit(request);
@@ -118,7 +119,7 @@ class GitDataCommitServiceTest {
     void commitMultiFile() {
         this.contract.queueHappyPath();
 
-        GitDataCommitService service = new GitDataCommitService(this.contract, 3);
+        GitDataCommitService service = new GitDataCommitService(this.contract, new WriteMetrics(new SimpleMeterRegistry()), 3);
         BatchCommitRequest request = BatchCommitRequest.builder()
             .add(newStagedBatch("data/v1/world/zodiac_events.json", "[1]", 2), entities -> "[1]")
             .add(newStagedBatch("data/v1/items/items.json", "[2,3]", 3), entities -> "[2,3]")
@@ -137,7 +138,7 @@ class GitDataCommitServiceTest {
     void commitMessageFormat() {
         this.contract.queueHappyPath();
 
-        GitDataCommitService service = new GitDataCommitService(this.contract, 3);
+        GitDataCommitService service = new GitDataCommitService(this.contract, new WriteMetrics(new SimpleMeterRegistry()), 3);
         BatchCommitRequest request = BatchCommitRequest.builder()
             .add(newStagedBatch("data/v1/world/zodiac_events.json", "[1]", 2), entities -> "[1]")
             .add(newStagedBatch("data/v1/items/items.json", "[2,3,4]", 5), entities -> "[2,3,4]")
@@ -158,7 +159,7 @@ class GitDataCommitServiceTest {
         this.contract.queueHappyPathMetadata();
         this.contract.queueUpdateRefOutcome(StubContract.UpdateRefOutcome.SUCCESS);
 
-        GitDataCommitService service = new GitDataCommitService(this.contract, 3);
+        GitDataCommitService service = new GitDataCommitService(this.contract, new WriteMetrics(new SimpleMeterRegistry()), 3);
         BatchCommitRequest request = buildRequest("data/v1/world/zodiac_events.json", "[1]", 1);
 
         GitDataCommitResult result = service.commit(request);
@@ -176,7 +177,7 @@ class GitDataCommitServiceTest {
             this.contract.queueUpdateRefOutcome(StubContract.UpdateRefOutcome.UNPROCESSABLE);
         }
 
-        GitDataCommitService service = new GitDataCommitService(this.contract, 3);
+        GitDataCommitService service = new GitDataCommitService(this.contract, new WriteMetrics(new SimpleMeterRegistry()), 3);
         BatchCommitRequest request = buildRequest("data/v1/world/zodiac_events.json", "[1]", 1);
 
         GitDataCommitResult result = service.commit(request);
@@ -192,7 +193,7 @@ class GitDataCommitServiceTest {
         this.contract.queueRefAndCommitOnly();
         this.contract.queueBlobOutcome(StubContract.BlobOutcome.INTERNAL_ERROR);
 
-        GitDataCommitService service = new GitDataCommitService(this.contract, 3);
+        GitDataCommitService service = new GitDataCommitService(this.contract, new WriteMetrics(new SimpleMeterRegistry()), 3);
         BatchCommitRequest request = buildRequest("data/v1/world/zodiac_events.json", "[1]", 1);
 
         GitDataCommitResult result = service.commit(request);

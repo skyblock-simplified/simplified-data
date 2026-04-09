@@ -81,13 +81,16 @@ public class GitDataCommitService {
     private static final @NotNull String BLOB_ENCODING = "utf-8";
 
     private final @NotNull SkyBlockGitDataContract contract;
+    private final @NotNull WriteMetrics metrics;
     private final int maxImmediateRetries;
 
     public GitDataCommitService(
         @NotNull SkyBlockGitDataContract skyBlockGitDataContract,
+        @NotNull WriteMetrics writeMetrics,
         @Value("${skyblock.data.github.write-412-immediate-retries:3}") int maxImmediateRetries
     ) {
         this.contract = skyBlockGitDataContract;
+        this.metrics = writeMetrics;
         this.maxImmediateRetries = maxImmediateRetries;
     }
 
@@ -133,6 +136,12 @@ public class GitDataCommitService {
                     continue;
                 }
 
+                // Retryable status but immediate-retry budget exhausted, OR a non-retryable
+                // status on the first attempt. Only the budget-exhausted case qualifies for
+                // the "retries exhausted" meter per the Phase 6b.3 catalog semantics.
+                if (isRetryable(status))
+                    this.metrics.recordRetriesExhausted(WriteMetrics.CommitMode.GIT_DATA);
+
                 log.error(
                     "Git Data commit failed with status {} on attempt {} (retryable={}) - escalating to backoff",
                     status, attempt, isRetryable(status), ex
@@ -158,14 +167,20 @@ public class GitDataCommitService {
      */
     private @NotNull String runFlow(@NotNull BatchCommitRequest request) throws SkyBlockDataException {
         // Step 1: get the current ref tip.
+        io.micrometer.core.instrument.Timer.Sample getRefSample = this.metrics.recordGitDataStepStart();
         GitRef currentRef = this.contract.getRef(TARGET_BRANCH);
+        this.metrics.recordGitDataStepEnd(getRefSample, WriteMetrics.GitDataStep.GET_REF);
         String parentCommitSha = currentRef.getObject().getSha();
 
         // Step 2: get the current tree SHA from the parent commit.
+        io.micrometer.core.instrument.Timer.Sample getCommitSample = this.metrics.recordGitDataStepStart();
         GitCommit parentCommit = this.contract.getCommit(parentCommitSha);
+        this.metrics.recordGitDataStepEnd(getCommitSample, WriteMetrics.GitDataStep.GET_COMMIT);
         String baseTreeSha = parentCommit.getTree().getSha();
 
         // Steps 3..N: create one blob per dirty file, collect tree entries.
+        // Each createBlob call is timed individually so the step_duration histogram
+        // reflects per-blob latency rather than the summed latency of all blobs in a batch.
         ConcurrentList<CreateTreeRequest.TreeEntry> treeEntries = Concurrent.newList();
 
         for (Map.Entry<String, String> fileEntry : request.getFileContents().entrySet()) {
@@ -176,7 +191,9 @@ public class GitDataCommitService {
                 .content(content)
                 .encoding(BLOB_ENCODING)
                 .build();
+            io.micrometer.core.instrument.Timer.Sample blobSample = this.metrics.recordGitDataStepStart();
             GitBlob blob = this.contract.createBlob(blobRequest);
+            this.metrics.recordGitDataStepEnd(blobSample, WriteMetrics.GitDataStep.CREATE_BLOB);
 
             CreateTreeRequest.TreeEntry treeEntry = CreateTreeRequest.TreeEntry.builder()
                 .path(path)
@@ -192,7 +209,9 @@ public class GitDataCommitService {
             .baseTree(baseTreeSha)
             .tree(treeEntries)
             .build();
+        io.micrometer.core.instrument.Timer.Sample treeSample = this.metrics.recordGitDataStepStart();
         var newTree = this.contract.createTree(treeRequest);
+        this.metrics.recordGitDataStepEnd(treeSample, WriteMetrics.GitDataStep.CREATE_TREE);
 
         // Step N+2: create the commit referencing the new tree and the parent commit.
         CreateCommitRequest commitRequest = CreateCommitRequest.builder()
@@ -200,14 +219,18 @@ public class GitDataCommitService {
             .tree(newTree.getSha())
             .parents(Concurrent.newList(parentCommitSha))
             .build();
+        io.micrometer.core.instrument.Timer.Sample commitSample = this.metrics.recordGitDataStepStart();
         GitCommit newCommit = this.contract.createCommit(commitRequest);
+        this.metrics.recordGitDataStepEnd(commitSample, WriteMetrics.GitDataStep.CREATE_COMMIT);
 
         // Step N+3: update the branch ref to the new commit. force=false enforces fast-forward.
         UpdateRefRequest updateRequest = UpdateRefRequest.builder()
             .sha(newCommit.getSha())
             .force(false)
             .build();
+        io.micrometer.core.instrument.Timer.Sample updateRefSample = this.metrics.recordGitDataStepStart();
         this.contract.updateRef(TARGET_BRANCH, updateRequest);
+        this.metrics.recordGitDataStepEnd(updateRefSample, WriteMetrics.GitDataStep.UPDATE_REF);
 
         return newCommit.getSha();
     }

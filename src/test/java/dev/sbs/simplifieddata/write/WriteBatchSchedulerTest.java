@@ -302,7 +302,7 @@ class WriteBatchSchedulerTest {
      */
     private static @NotNull GitDataCommitService stubGitDataService() {
         SkyBlockGitDataContractStub contractStub = new SkyBlockGitDataContractStub();
-        return new GitDataCommitService(contractStub, 3) {
+        return new GitDataCommitService(contractStub, new WriteMetrics(new SimpleMeterRegistry()), 3) {
             @Override
             public @NotNull GitDataCommitResult commit(@NotNull BatchCommitRequest request) {
                 throw new UnsupportedOperationException(
@@ -495,7 +495,7 @@ class WriteBatchSchedulerTest {
         @NotNull GitDataCommitResult nextResult = GitDataCommitResult.success("stub-commit-sha");
 
         CapturingGitDataService() {
-            super(new SkyBlockGitDataContractStub(), 3);
+            super(new SkyBlockGitDataContractStub(), new WriteMetrics(new SimpleMeterRegistry()), 3);
         }
 
         @Override
