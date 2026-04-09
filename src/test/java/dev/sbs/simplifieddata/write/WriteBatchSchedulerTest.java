@@ -65,17 +65,19 @@ class WriteBatchSchedulerTest {
 
     private RecordingConsumer consumer;
     private StubFactory factory;
+    private WriteMetrics metrics;
 
     @BeforeEach
     void setUp() {
         this.consumer = new RecordingConsumer();
         this.factory = new StubFactory();
+        this.metrics = new WriteMetrics(new SimpleMeterRegistry());
     }
 
     @Test
     @DisplayName("tick with an empty writable source registry is a no-op")
     void tickEmptyRegistry() {
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), this.metrics, 1L, WriteMode.CONTENTS);
 
         scheduler.tick();
 
@@ -89,7 +91,7 @@ class WriteBatchSchedulerTest {
         source.nextResult = WritableRemoteJsonSource.CommitBatchResult.success(2, "abc123");
         this.factory.register(ZodiacEvent.class, source);
 
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), this.metrics, 1L, WriteMode.CONTENTS);
         scheduler.tick();
 
         assertThat(source.commitCount, equalTo(1));
@@ -105,7 +107,7 @@ class WriteBatchSchedulerTest {
         source.nextResult = buildFailed(List.of(m1, m2));
         this.factory.register(ZodiacEvent.class, source);
 
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), this.metrics, 1L, WriteMode.CONTENTS);
         scheduler.tick();
 
         assertThat(this.consumer.getRetries(), hasSize(2));
@@ -135,7 +137,7 @@ class WriteBatchSchedulerTest {
         source.nextResult = buildFailed(List.of(priorRetry));
         this.factory.register(ZodiacEvent.class, source);
 
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), this.metrics, 1L, WriteMode.CONTENTS);
         scheduler.tick();
 
         assertThat(this.consumer.getRetries(), hasSize(1));
@@ -158,7 +160,7 @@ class WriteBatchSchedulerTest {
         badSource.nextResult = buildFailed(List.of(newOtherMutation()));
         this.factory.register(OtherModel.class, badSource);
 
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), this.metrics, 1L, WriteMode.CONTENTS);
         scheduler.tick();
 
         assertThat(okSource.commitCount, equalTo(1));
@@ -174,7 +176,7 @@ class WriteBatchSchedulerTest {
         source.nextResult = buildFailed(List.of(newMutation(WriteRequest.Operation.UPSERT, "A")));
         this.factory.register(ZodiacEvent.class, source);
 
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), this.metrics, 1L, WriteMode.CONTENTS);
         scheduler.flushOnShutdown();
 
         assertThat(source.commitCount, equalTo(1));
@@ -191,7 +193,7 @@ class WriteBatchSchedulerTest {
         other.nextResult = WritableRemoteJsonSource.CommitBatchResult.success(1, "xyz");
         this.factory.register(OtherModel.class, other);
 
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), this.metrics, 1L, WriteMode.CONTENTS);
         scheduler.tick();
 
         assertThat(throwing.commitCount, equalTo(1));
@@ -205,7 +207,7 @@ class WriteBatchSchedulerTest {
     @DisplayName("GIT_DATA tick with empty registry is a no-op and never invokes the commit service")
     void gitDataTickEmpty() {
         CapturingGitDataService capturing = new CapturingGitDataService();
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, 1L, WriteMode.GIT_DATA);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, this.metrics, 1L, WriteMode.GIT_DATA);
 
         scheduler.tick();
 
@@ -226,7 +228,7 @@ class WriteBatchSchedulerTest {
 
         CapturingGitDataService capturing = new CapturingGitDataService();
         capturing.nextResult = GitDataCommitResult.success("commitsha");
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, 1L, WriteMode.GIT_DATA);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, this.metrics, 1L, WriteMode.GIT_DATA);
 
         scheduler.tick();
 
@@ -250,7 +252,7 @@ class WriteBatchSchedulerTest {
 
         CapturingGitDataService capturing = new CapturingGitDataService();
         capturing.nextResult = GitDataCommitResult.failure(new RuntimeException("simulated Git Data failure"));
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, 1L, WriteMode.GIT_DATA);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, this.metrics, 1L, WriteMode.GIT_DATA);
 
         scheduler.tick();
 
@@ -267,7 +269,7 @@ class WriteBatchSchedulerTest {
         this.factory.register(ZodiacEvent.class, zodiac);
 
         CapturingGitDataService capturing = new CapturingGitDataService();
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, 1L, WriteMode.GIT_DATA);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, this.metrics, 1L, WriteMode.GIT_DATA);
 
         scheduler.tick();
 
@@ -283,7 +285,7 @@ class WriteBatchSchedulerTest {
 
         CapturingGitDataService capturing = new CapturingGitDataService();
         capturing.nextResult = GitDataCommitResult.failure(new RuntimeException("simulated failure"));
-        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, 1L, WriteMode.GIT_DATA);
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, capturing, this.metrics, 1L, WriteMode.GIT_DATA);
 
         scheduler.flushOnShutdown();
 

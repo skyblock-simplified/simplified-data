@@ -78,6 +78,7 @@ public class WriteBatchScheduler {
     private final @NotNull RemoteSkyBlockFactory factory;
     private final @NotNull WriteQueueConsumer consumer;
     private final @NotNull GitDataCommitService gitDataCommitService;
+    private final @NotNull WriteMetrics metrics;
     private final @NotNull Duration retryInitialDelay;
     private final @NotNull WriteMode writeMode;
 
@@ -85,12 +86,14 @@ public class WriteBatchScheduler {
         @NotNull RemoteSkyBlockFactory remoteSkyBlockFactory,
         @NotNull WriteQueueConsumer writeQueueConsumer,
         @NotNull GitDataCommitService gitDataCommitService,
+        @NotNull WriteMetrics writeMetrics,
         @Value("${skyblock.data.github.write-retry-initial-delay-minutes:1}") long retryInitialDelayMinutes,
         @Value("${skyblock.data.github.write-mode:GIT_DATA}") @NotNull WriteMode writeMode
     ) {
         this.factory = remoteSkyBlockFactory;
         this.consumer = writeQueueConsumer;
         this.gitDataCommitService = gitDataCommitService;
+        this.metrics = writeMetrics;
         this.retryInitialDelay = Duration.ofMinutes(retryInitialDelayMinutes);
         this.writeMode = writeMode;
     }
@@ -183,15 +186,21 @@ public class WriteBatchScheduler {
         if (request.isEmpty())
             return;
 
+        io.micrometer.core.instrument.Timer.Sample commitSample = this.metrics.recordCommitStart();
         GitDataCommitResult result = this.gitDataCommitService.commit(request);
 
         if (result.isSuccess()) {
+            this.metrics.recordCommitSuccess(commitSample, WriteMetrics.CommitMode.GIT_DATA);
             log.info(
                 "Git Data tick summary: applied={} files={} commit={} (shutdown={})",
                 request.getTotalMutationCount(), request.getDirtyFileCount(), result.getCommitSha(), isShutdown
             );
             return;
         }
+
+        // Derive a bounded-enum failure reason from the commit result's root cause.
+        WriteMetrics.FailureReason reason = deriveFailureReason(result.getFailureCause());
+        this.metrics.recordCommitFailure(commitSample, WriteMetrics.CommitMode.GIT_DATA, reason);
 
         if (isShutdown) {
             log.warn(
@@ -202,13 +211,32 @@ public class WriteBatchScheduler {
         }
 
         // Escalate every mutation in every source batch.
-        for (StagedBatch<?> sourceBatch : request.getSourceBatches())
+        int escalated = 0;
+        for (StagedBatch<?> sourceBatch : request.getSourceBatches()) {
             this.escalateStagedBatch(sourceBatch.getModelClass(), sourceBatch);
+            escalated += sourceBatch.getMutationsUntyped().size();
+        }
+        this.metrics.recordEscalation(WriteMetrics.CommitMode.GIT_DATA, escalated);
 
         log.warn(
             "Git Data tick escalated {} mutations across {} files to retry queue",
             request.getTotalMutationCount(), request.getDirtyFileCount()
         );
+    }
+
+    /**
+     * Maps a commit failure's root cause to a bounded
+     * {@link WriteMetrics.FailureReason} tag value. Uses the
+     * {@link dev.sbs.simplifieddata.client.exception.SkyBlockDataException}
+     * status code when available, and falls back to coarse classification
+     * (network / other) for everything else.
+     */
+    private static @NotNull WriteMetrics.FailureReason deriveFailureReason(@org.jetbrains.annotations.Nullable Throwable cause) {
+        if (cause instanceof dev.sbs.simplifieddata.client.exception.SkyBlockDataException ex)
+            return WriteMetrics.FailureReason.fromStatus(ex.getStatus().getCode());
+        if (cause instanceof java.net.SocketException || cause instanceof java.net.UnknownHostException || cause instanceof java.net.ConnectException)
+            return WriteMetrics.FailureReason.NETWORK;
+        return WriteMetrics.FailureReason.OTHER;
     }
 
     /**
@@ -228,9 +256,15 @@ public class WriteBatchScheduler {
             WritableRemoteJsonSource<?> source = entry.getValue();
             WritableRemoteJsonSource.CommitBatchResult result;
 
+            // Per-source Timer.Sample: Contents API mode produces one commit per
+            // dirty source per tick, so the timing unit is a single source's
+            // commitBatch() call rather than a cross-source aggregation.
+            io.micrometer.core.instrument.Timer.Sample commitSample = this.metrics.recordCommitStart();
+
             try {
                 result = source.commitBatch();
             } catch (Throwable ex) {
+                this.metrics.recordCommitFailure(commitSample, WriteMetrics.CommitMode.CONTENTS, WriteMetrics.FailureReason.OTHER);
                 log.error(
                     "commitBatch threw unexpected exception for type '{}' - continuing with next source",
                     entry.getKey().getSimpleName(), ex
@@ -238,14 +272,22 @@ public class WriteBatchScheduler {
                 continue;
             }
 
-            if (result.isEmpty())
+            if (result.isEmpty()) {
+                // No-op tick for this source: discard the started sample by recording
+                // it as a success with zero elapsed. Micrometer has no public API to
+                // abandon a sample without stopping it, so we stop with a success
+                // marker and the tiny elapsed time is a true reflection of the no-op.
+                this.metrics.recordCommitSuccess(commitSample, WriteMetrics.CommitMode.CONTENTS);
                 continue;
+            }
 
             if (result.isSuccess()) {
+                this.metrics.recordCommitSuccess(commitSample, WriteMetrics.CommitMode.CONTENTS);
                 totalApplied += result.getAppliedCount();
                 continue;
             }
 
+            this.metrics.recordCommitFailure(commitSample, WriteMetrics.CommitMode.CONTENTS, WriteMetrics.FailureReason.OTHER);
             totalFailed += result.getFailures().size();
 
             if (isShutdown) {
@@ -257,6 +299,7 @@ public class WriteBatchScheduler {
             }
 
             this.escalateCommitFailures(entry.getKey(), result);
+            this.metrics.recordEscalation(WriteMetrics.CommitMode.CONTENTS, result.getFailures().size());
         }
 
         if (totalApplied > 0 || totalFailed > 0) {
