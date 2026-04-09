@@ -351,58 +351,9 @@ public class WriteBatchScheduler {
         // Producer-side WriteRequest.upsert/delete generate a fresh UUID for
         // each call, but for retries we need to preserve the original
         // producer's request id so dead-letter and audit trails stay
-        // correlated. The WriteRequest class doesn't expose a setter, so we
-        // mirror the producer's request id via a rebuild that resets it
-        // through reflection.
-        request = rebuildWithRequestId(request, mutation.getRequestId());
+        // correlated end-to-end across every retry cycle.
+        request = request.withRequestId(mutation.getRequestId());
         return RetryEnvelope.forRetry(request, nextAttempt, readyAt);
-    }
-
-    /**
-     * Reflection-based rebuilder that produces a new {@link WriteRequest}
-     * with the caller-supplied {@code requestId} substituted for the
-     * randomly-generated id from
-     * {@link WriteRequest#upsert(Class, JpaModel, com.google.gson.Gson, String) WriteRequest.upsert}.
-     *
-     * <p>The persistence library intentionally makes {@link WriteRequest}'s
-     * constructor private to enforce factory-method construction, so this
-     * scheduler-local helper uses reflection to bypass that constraint for
-     * the retry correlation case. The library's {@code WriteRequest} is
-     * {@code final} with {@code private final} fields, so reflection is
-     * the only way to produce a new instance with a different requestId
-     * without adding a library-side API.
-     *
-     * <p>A future persistence library revision could add a
-     * {@code WriteRequest.withRequestId(UUID)} helper or an overloaded
-     * factory method that takes an explicit requestId, which would let us
-     * drop this helper. For now the reflection path is localized and
-     * well-contained.
-     */
-    private static @NotNull WriteRequest rebuildWithRequestId(@NotNull WriteRequest source, @NotNull java.util.UUID requestId) {
-        try {
-            java.lang.reflect.Constructor<WriteRequest> ctor = WriteRequest.class.getDeclaredConstructor(
-                java.util.UUID.class,
-                Instant.class,
-                WriteRequest.Operation.class,
-                String.class,
-                String.class,
-                String.class
-            );
-            ctor.setAccessible(true);
-            return ctor.newInstance(
-                requestId,
-                source.getTimestamp(),
-                source.getOperation(),
-                source.getEntityClassName(),
-                source.getEntityJson(),
-                source.getSourceId()
-            );
-        } catch (Exception ex) {
-            throw new IllegalStateException(
-                "Failed to rebuild WriteRequest with preserved requestId - is the persistence library constructor signature still compatible?",
-                ex
-            );
-        }
     }
 
 }
