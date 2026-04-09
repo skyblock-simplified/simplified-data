@@ -2,7 +2,6 @@ package dev.sbs.simplifieddata.poller;
 
 import com.google.gson.Gson;
 import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.simplifieddata.client.ETagContext;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
@@ -19,7 +18,6 @@ import dev.simplified.persistence.exception.JpaException;
 import dev.simplified.persistence.source.ManifestIndex;
 import lombok.extern.log4j.Log4j2;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -223,11 +221,14 @@ public class AssetPoller {
             String storedEtag = currentState.getEtag().orElse(null);
             String storedCommitSha = currentState.getCommitSha().orElse(null);
 
-            Optional<CommitProbe> probe = this.probeLatestCommit(storedEtag);
+            Optional<CommitProbe> probe = this.probeLatestCommit();
 
             if (probe.isEmpty()) {
                 this.recordNoChange();
-                log.debug("AssetPoller source='{}' - no change (304 Not Modified, etag='{}')", this.sourceId, storedEtag);
+                log.debug(
+                    "AssetPoller source='{}' - no change (cache-miss 304 revalidation, storedEtag='{}')",
+                    this.sourceId, storedEtag
+                );
                 return;
             }
 
@@ -297,27 +298,36 @@ public class AssetPoller {
     }
 
     /**
-     * Issues the conditional Commits API call and returns the parsed commit sha + ETag header,
-     * or {@link Optional#empty()} on a 304 short-circuit.
+     * Issues the Commits API call and returns the parsed commit sha + ETag header, or
+     * {@link Optional#empty()} on a cache-miss {@code 304} revalidation.
      *
-     * <p>The conditional request is attached via {@link ETagContext#callWithEtag} when a stored
-     * ETag is available; otherwise the call is unconditional and every response counts against
-     * the rate-limit budget.
+     * <p>The Phase 5.5.1 client-library update auto-attaches {@code If-None-Match} from the
+     * framework's recent-response cache on every {@code GET}, so this method just makes a
+     * plain contract call. Three distinct outcomes are possible:
+     * <ul>
+     *   <li><b>Fresh 200</b> - GitHub returned new content. The framework caches the response
+     *       and the contract returns the new commit list. {@code lastResponseAccessor} exposes
+     *       the 200 envelope with the new ETag + body.</li>
+     *   <li><b>Transparent 304</b> - GitHub returned {@code 304 Not Modified} and the framework
+     *       located a matching cached body in {@code Client.getRecentResponses()}. The response
+     *       interceptor synthesizes a new {@code Response.Impl} with
+     *       {@link dev.simplified.client.response.HttpStatus#NOT_MODIFIED} and the borrowed
+     *       body, appends it to the cache, and returns it to the contract. This method sees a
+     *       normal return, reads the synthesized last-response, and extracts the commit sha
+     *       from the cached body - which matches the stored sha, so the caller short-circuits
+     *       via the {@code equals(storedCommitSha)} check in {@code doPoll}.</li>
+     *   <li><b>Cache-miss 304</b> - GitHub returned {@code 304} but the framework has no
+     *       matching cached body (first call after restart, TTL eviction, streaming endpoint).
+     *       The response interceptor falls through to the error-decoder path, which raises
+     *       {@link NotModifiedException}. This method catches the exception and returns empty;
+     *       the caller treats this as a no-change cycle and bumps {@code lastCheckedAt}.</li>
+     * </ul>
      *
-     * @param storedEtag the previously-observed ETag, or {@code null} for an unconditional call
-     * @return a {@link CommitProbe} on 200, or empty on 304
+     * @return a {@link CommitProbe} on 200 or transparent 304, or empty on cache-miss 304
      */
-    private @NotNull Optional<CommitProbe> probeLatestCommit(@Nullable String storedEtag) {
-        // Framework's InternalErrorDecoder short-circuits 3xx responses into a typed
-        // NotModifiedException so callers can recognise the cache-hit signal without
-        // inspecting status codes. Treat this as the successful "no change" outcome and
-        // return empty. Any other ApiException propagates to the doPoll() catch block.
+    private @NotNull Optional<CommitProbe> probeLatestCommit() {
         try {
-            if (storedEtag == null) {
-                this.contract.getLatestMasterCommit();
-            } else {
-                ETagContext.callWithEtag(storedEtag, this.contract::getLatestMasterCommit);
-            }
+            this.contract.getLatestMasterCommit();
         } catch (NotModifiedException ex) {
             return Optional.empty();
         }

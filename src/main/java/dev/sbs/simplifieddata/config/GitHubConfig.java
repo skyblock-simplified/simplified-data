@@ -2,7 +2,6 @@ package dev.sbs.simplifieddata.config;
 
 import com.google.gson.Gson;
 import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.simplifieddata.client.ETagContext;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.source.GitHubFileFetcher;
@@ -37,14 +36,30 @@ import java.util.function.Supplier;
  *   <li>{@code skyBlockDataAuthorizationSupplier} - Spring-injected supplier of the
  *       {@code Authorization} header value, resolved once per outbound request via the
  *       {@link dev.simplified.client.Client} dynamic-header pipeline.</li>
- *   <li>{@code skyBlockDataIfNoneMatchSupplier} - dynamic supplier bridging {@link ETagContext}
- *       to the {@code If-None-Match} header pipeline. Phase 4b never sets an ETag; Phase 4c's
- *       poller will.</li>
  *   <li>{@code skyBlockDataClient} - the {@link Client} wrapping the
  *       {@link SkyBlockDataContract} proxy.</li>
  *   <li>{@code gitHubIndexProvider} - the Phase 4a {@link IndexProvider} bridge.</li>
  *   <li>{@code gitHubFileFetcher} - the Phase 4a {@link FileFetcher} bridge.</li>
  * </ul>
+ *
+ * <p>Phase 5.5.1 note - {@code If-None-Match} conditional requests are handled automatically
+ * by the {@code dev.simplified.client} library. {@code InternalRequestInterceptor} attaches
+ * the header on every {@code GET} / {@code HEAD} when a matching cached response exists in
+ * {@link Client#getRecentResponses()}, and {@code InternalResponseInterceptor} transparently
+ * serves the cached body on {@code 304} by synthesizing a fresh response envelope with
+ * {@link dev.simplified.client.response.HttpStatus#NOT_MODIFIED} as the wire-truth status.
+ * Callers only see a {@link dev.simplified.client.exception.NotModifiedException} on the
+ * rare cache-miss revalidation path (client restart, TTL prune, streaming endpoint). No
+ * explicit {@code If-None-Match} supplier is needed here - the framework does it.
+ *
+ * <p>The default {@link dev.simplified.client.request.Timings#cacheDuration()} of one hour
+ * and {@code maxCacheSize} of 100 are appropriate for {@code simplified-data}: the 41
+ * entity files + the commits API response comfortably fit under the 100 cap, and steady-state
+ * no-change polls synthesize additional {@code 304} entries whose borrowed body references
+ * keep the original 200 bodies live via GC even after the 200 entries themselves age out.
+ * {@code REDIRECTION} is a non-error state, so synthesized 304 responses pass the
+ * framework's {@code !response.isError()} cache filter and keep the auto-attach chain alive
+ * indefinitely.
  *
  * <p>None of these beans issue any network I/O at construction. The {@link Client} wrapper
  * builds the Feign proxy and Apache HttpClient connection pool lazily on the first contract
@@ -99,24 +114,9 @@ public class GitHubConfig {
     }
 
     /**
-     * Builds the dynamic supplier of the {@code If-None-Match} header value.
-     *
-     * <p>Delegates to {@link ETagContext#current()} so Phase 4c's poller can opt into
-     * conditional requests via {@link ETagContext#callWithEtag(String, Supplier)} without any
-     * additional Spring wiring. Phase 4b never sets an ETag so the supplier always returns
-     * empty and the header is omitted on every request.
-     *
-     * @return the dynamic-header supplier backed by {@link ETagContext}
-     */
-    @Bean
-    public @NotNull Supplier<Optional<String>> skyBlockDataIfNoneMatchSupplier() {
-        return ETagContext::current;
-    }
-
-    /**
      * Builds the {@link Client} for the {@link SkyBlockDataContract}.
      *
-     * <p>Wires four headers:
+     * <p>Wires three headers:
      * <ul>
      *   <li>{@code Accept} (static) - pinned to {@code application/vnd.github.raw+json} so the
      *       Contents endpoint returns raw file bodies for files above 1 MB. The Commits
@@ -124,9 +124,12 @@ public class GitHubConfig {
      *   <li>{@code X-GitHub-Api-Version} (static) - pinned to {@code 2022-11-28}.</li>
      *   <li>{@code Authorization} (dynamic) - sourced from
      *       {@code skyBlockDataAuthorizationSupplier}.</li>
-     *   <li>{@code If-None-Match} (dynamic) - sourced from
-     *       {@code skyBlockDataIfNoneMatchSupplier}.</li>
      * </ul>
+     *
+     * <p>{@code If-None-Match} is handled automatically by the
+     * {@code dev.simplified.client.interceptor.InternalRequestInterceptor} auto-attach path
+     * introduced in the Phase 5.5.1 client-library update - see the class-level Javadoc.
+     * No explicit header wiring is required here.
      *
      * <p>The error decoder maps every non-2xx response to a {@link SkyBlockDataException},
      * matching the {@code HypixelApiException} / {@code SbsApiException} /
@@ -138,13 +141,11 @@ public class GitHubConfig {
      * {@code ConcurrentList<GitHubCommit>} deserialization on the commit response.
      *
      * @param skyBlockDataAuthorizationSupplier the dynamic {@code Authorization} supplier
-     * @param skyBlockDataIfNoneMatchSupplier the dynamic {@code If-None-Match} supplier
      * @return the fully constructed client wrapper; no network I/O performed during build
      */
     @Bean
     public @NotNull Client<SkyBlockDataContract> skyBlockDataClient(
-        @Qualifier("skyBlockDataAuthorizationSupplier") @NotNull Supplier<Optional<String>> skyBlockDataAuthorizationSupplier,
-        @Qualifier("skyBlockDataIfNoneMatchSupplier") @NotNull Supplier<Optional<String>> skyBlockDataIfNoneMatchSupplier
+        @Qualifier("skyBlockDataAuthorizationSupplier") @NotNull Supplier<Optional<String>> skyBlockDataAuthorizationSupplier
     ) {
         Gson gson = MinecraftApi.getGson();
 
@@ -152,7 +153,6 @@ public class GitHubConfig {
             .withHeader("Accept", GITHUB_RAW_ACCEPT)
             .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .withDynamicHeader("Authorization", skyBlockDataAuthorizationSupplier)
-            .withDynamicHeader("If-None-Match", skyBlockDataIfNoneMatchSupplier)
             .withErrorDecoder((methodKey, response) -> {
                 throw new SkyBlockDataException(methodKey, response);
             })

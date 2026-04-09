@@ -14,7 +14,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 
 /**
- * Unit tests for the 403/429/304 disambiguation helpers on {@link SkyBlockDataException}.
+ * Unit tests for the 403/429 disambiguation helpers on {@link SkyBlockDataException}.
  *
  * <p>Every test constructs a {@link feign.Response} with hand-crafted status + headers + body
  * and verifies the helper methods return the correct classification. No network I/O.
@@ -33,7 +33,6 @@ class SkyBlockDataExceptionTest {
         assertThat(ex.isPrimaryRateLimit(), is(true));
         assertThat(ex.isPermissions(), is(false));
         assertThat(ex.isSecondaryRateLimit(), is(false));
-        assertThat(ex.isNotModified(), is(false));
     }
 
     @Test

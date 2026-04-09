@@ -18,16 +18,20 @@ import java.util.Optional;
  * the shared {@link MinecraftApi#getGson()} instance so callers can reach the GitHub
  * {@code message} and {@code documentation_url} fields without re-parsing.
  *
- * <p>Four helpers disambiguate the common 403/429/304 confusion surface on the GitHub API:
+ * <p>Three helpers disambiguate the common 403/429 confusion surface on the GitHub API:
  * <ul>
  *   <li>{@link #isPrimaryRateLimit()} - 403/429 with {@code x-ratelimit-remaining: 0} and a
  *       message containing {@code "API rate limit exceeded"}.</li>
  *   <li>{@link #isSecondaryRateLimit()} - 403/429 with a message containing {@code "secondary
  *       rate limit"} or {@code "abuse detection"}.</li>
  *   <li>{@link #isPermissions()} - 403 that is neither of the above (PAT scope problem).</li>
- *   <li>{@link #isNotModified()} - 304 conditional-request short-circuit. Phase 4b does not
- *       trip this path; provided for Phase 4c's poller.</li>
  * </ul>
+ *
+ * <p>A 304 {@code Not Modified} never reaches this class - the framework's
+ * {@code InternalErrorDecoder} short-circuits 3xx responses into
+ * {@link dev.simplified.client.exception.NotModifiedException} before the per-client
+ * {@code ClientErrorDecoder} runs, and the Phase 5.5.1 auto-ETag pipeline transparently
+ * serves cached bodies on 304 so callers rarely see the exception at all.
  *
  * <p>This subclass deliberately does NOT follow the five-constructor pattern from the global
  * {@code CLAUDE.md} exception style guide. The base {@link ApiException} constructor surface
@@ -113,18 +117,6 @@ public final class SkyBlockDataException extends ApiException {
         return this.getStatus().getCode() == 403
             && !this.isPrimaryRateLimit()
             && !this.isSecondaryRateLimit();
-    }
-
-    /**
-     * Returns whether this failure represents a conditional-request short-circuit.
-     *
-     * <p>Callers that poll with {@code If-None-Match} should treat 304 as a no-op rather than
-     * an error. Phase 4b does not trip this path; it is provided for Phase 4c's poller.
-     *
-     * @return {@code true} when the status is 304 Not Modified
-     */
-    public boolean isNotModified() {
-        return this.getStatus().getCode() == 304;
     }
 
 }

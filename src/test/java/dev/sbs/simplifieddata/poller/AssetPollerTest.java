@@ -2,7 +2,6 @@ package dev.sbs.simplifieddata.poller;
 
 import com.google.gson.Gson;
 import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.simplifieddata.client.ETagContext;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
@@ -68,7 +67,9 @@ import static org.hamcrest.Matchers.nullValue;
  *   <li>Second poll with the same commit SHA records a no-change cycle.</li>
  *   <li>Second poll with a fresh commit SHA fetches the manifest, computes the diff, and
  *       updates the state tables accordingly.</li>
- *   <li>304 short-circuit path bumps {@code lastCheckedAt} only and skips the manifest fetch.</li>
+ *   <li>Cache-miss {@code 304} revalidation path (the stub throws
+ *       {@link NotModifiedException} directly, mimicking the framework's behavior when the
+ *       client's recent-response cache has no matching body) records a no-change cycle.</li>
  *   <li>{@link SkyBlockDataException} during the commits call is swallowed without crashing
  *       the poller.</li>
  *   <li>{@code pollEnabled=false} via constructor flag bypasses the scheduled and startup
@@ -101,15 +102,12 @@ class AssetPollerTest {
         this.contract = new StubContract();
         this.accessor = new StubLastResponseAccessor();
         this.refreshTrigger = new RecordingRefreshTrigger();
-
-        ETagContext.clear();
     }
 
     @AfterEach
     void tearDown() {
         if (this.sessionManager != null)
             this.sessionManager.shutdown();
-        ETagContext.clear();
     }
 
     @Test
@@ -309,8 +307,8 @@ class AssetPollerTest {
     }
 
     @Test
-    @DisplayName("304 short-circuit bumps lastCheckedAt and skips manifest fetch")
-    void shortCircuit304() {
+    @DisplayName("cache-miss 304 revalidation bumps lastCheckedAt and skips manifest fetch")
+    void cacheMiss304Revalidation() {
         ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
         this.contract.commitList = commits;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
@@ -319,10 +317,13 @@ class AssetPollerTest {
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
 
-        // Second cycle: simulate the framework's 304 short-circuit by having the stub throw
-        // a NotModifiedException directly. The framework's InternalErrorDecoder produces this
-        // exception type when GitHub returns 304 to a conditional request, and AssetPoller's
-        // probeLatestCommit catches it as the "no change" signal.
+        // Second cycle: simulate the framework's cache-miss 304 revalidation path by having
+        // the stub throw a NotModifiedException directly. In production this is the rare path
+        // where GitHub returned 304 but the framework's recent-response cache has no matching
+        // body (for example after a TTL prune or a client restart). The common transparent-304
+        // path - where the framework synthesizes a Response envelope with the cached body - is
+        // exercised by the change/no-change tests above, since the contract-level stubs return
+        // a canned ConcurrentList just like a framework-synthesized response would.
         this.contract.commitException = buildNotModified();
         this.contract.commitList = null;
         poller.scheduledPoll();
@@ -330,8 +331,8 @@ class AssetPollerTest {
         this.assetSession.with(session -> {
             ExternalAssetState state = session.find(ExternalAssetState.class, "skyblock-data");
             assertThat(state, is(notNullValue()));
-            // Commit sha unchanged because the 304 short-circuits before any state mutation
-            // beyond the lastCheckedAt bump.
+            // Commit sha unchanged because the cache-miss 304 short-circuits before any state
+            // mutation beyond the lastCheckedAt bump.
             assertThat(state.getCommitSha().orElse(null), equalTo("sha-one"));
             assertThat(state.getEtag().orElse(null), equalTo("W/\"etag-one\""));
         });
