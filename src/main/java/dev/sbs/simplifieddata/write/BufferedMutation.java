@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * In-memory record of a single buffered write mutation queued inside a
@@ -15,18 +16,22 @@ import java.time.Instant;
  * {@link WriteBatchScheduler} tick.
  *
  * <p>Produced by {@link WriteQueueConsumer} when it drains a
- * {@link WriteRequest} off the Hazelcast {@code skyblock.writes} queue and
- * dispatches it to a {@code WritableRemoteJsonSource.upsert(T)} or
- * {@code .delete(T)}. Consumed by the matching
- * {@code commitBatch()} call on the next scheduler tick, which snapshots the
- * per-source buffer, groups by target file, and issues the GitHub Contents API
- * PUT.
+ * {@link WriteRequest} off the Hazelcast {@code skyblock.writes} queue (or a
+ * {@link RetryEnvelope} from the retry IMap) and dispatches it to a
+ * {@code WritableRemoteJsonSource.upsert(T)} or {@code .delete(T)}. Consumed
+ * by the matching {@code commitBatch()} or {@code stageBatch()} call on the
+ * next scheduler tick.
  *
- * <p>The record carries both the hydrated entity (so
- * {@code commitBatch()} can merge it into the current file state without
- * touching the queue again) and the {@link Instant} at which the mutation
- * entered the buffer (so observability logs can surface the end-to-end latency
- * from producer put to GitHub commit).
+ * <p>The record carries the hydrated entity (so {@code stageBatch()} can
+ * merge it into the current file state without touching the queue again),
+ * the {@link Instant} at which the mutation entered the buffer (for end-to-end
+ * latency observability), and the {@link #attempt} counter which tracks how
+ * many retry rounds the mutation has already been through. A fresh mutation
+ * off the primary IQueue has {@code attempt = 0}; a rehydrated retry has
+ * {@code attempt = N} where N is the retry cycle the IMap entry was at when
+ * it was drained. The scheduler reads this field on escalation and schedules
+ * the next retry as {@code attempt + 1}, which cleanly bounds the retry chain
+ * at {@code maxRetryAttempts} instead of looping forever.
  *
  * @param <T> the entity type being mutated
  */
@@ -41,9 +46,46 @@ public final class BufferedMutation<T extends JpaModel> {
     private final @NotNull T entity;
 
     /** The originating {@link WriteRequest#getRequestId()} for traceability in logs and the dead-letter IMap. */
-    private final @NotNull java.util.UUID requestId;
+    private final @NotNull UUID requestId;
 
     /** The instant the mutation was buffered - used for per-entry latency observability. */
     private final @NotNull Instant bufferedAt;
+
+    /**
+     * The retry attempt counter this mutation entered the buffer with.
+     *
+     * <p>{@code 0} for a fresh mutation dispatched from the primary IQueue.
+     * {@code N > 0} when the mutation was rehydrated from the Phase 6b.1
+     * {@link RetryEnvelope} IMap on its Nth retry cycle.
+     *
+     * <p>The scheduler reads this field in
+     * {@code WriteBatchScheduler.escalateStagedBatch} and schedules the next
+     * retry as {@code attempt + 1}, producing a bounded retry chain that
+     * terminates in a dead-letter after {@code maxRetryAttempts} cycles. The
+     * field is authoritative for "has this mutation been retried N times
+     * already" - do NOT rely on external attempt-tracking maps keyed on
+     * {@link #requestId} because those are not preserved across consumer
+     * restarts.
+     */
+    private final int attempt;
+
+    /**
+     * Convenience constructor for the common case of a fresh mutation with
+     * {@code attempt = 0}. Keeps call sites terse where the attempt counter
+     * is known to be zero (producer dispatch, test fixtures).
+     *
+     * @param operation upsert or delete
+     * @param entity the hydrated entity
+     * @param requestId the originating producer request id
+     * @param bufferedAt the instant the mutation was buffered
+     */
+    public BufferedMutation(
+        @NotNull WriteRequest.Operation operation,
+        @NotNull T entity,
+        @NotNull UUID requestId,
+        @NotNull Instant bufferedAt
+    ) {
+        this(operation, entity, requestId, bufferedAt, 0);
+    }
 
 }

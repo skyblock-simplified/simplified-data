@@ -13,7 +13,6 @@ import dev.simplified.persistence.source.WriteRequest;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.log4j.Log4j2;
 import org.jetbrains.annotations.NotNull;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -21,14 +20,15 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.DelayQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Drains the {@code skyblock.writes} Hazelcast {@link IQueue} + a local
- * {@link DelayQueue} of retry-pending requests on a dedicated daemon thread,
- * dispatching each drained {@link WriteRequest} into the per-entity
+ * Drains the {@code skyblock.writes} Hazelcast {@link IQueue} plus the
+ * {@code skyblock.writes.retry} Hazelcast {@link IMap} on a dedicated daemon
+ * thread, dispatching each drained {@link WriteRequest} into the per-entity
  * {@link WritableRemoteJsonSource} buffer owned by
  * {@link RemoteSkyBlockFactory#getWritableSources()}.
  *
@@ -38,8 +38,11 @@ import java.util.concurrent.TimeUnit;
  * by {@code @PreDestroy} which interrupts the daemon thread and waits briefly
  * for clean exit.
  *
- * <p>Drain loop: each iteration polls the Hazelcast queue and the local
- * {@link DelayQueue} alternately. When a request is available, the consumer:
+ * <p>Drain loop: each iteration polls the Hazelcast queue and the retry IMap
+ * alternately. The IQueue poll uses a short 500ms timeout so a steady stream
+ * of fresh writes does not starve the retry scan, and the retry scan runs
+ * opportunistically whenever the queue poll returns empty. For each drained
+ * request the consumer:
  * <ol>
  *   <li>Resolves the entity class via {@link WriteRequest#resolveEntityType()},
  *       wrapping {@link ClassNotFoundException} as {@link JpaException} and
@@ -50,36 +53,40 @@ import java.util.concurrent.TimeUnit;
  *       log a WARN and skip.</li>
  *   <li>Rehydrates the entity via
  *       {@link WriteRequest#deserializeEntity(Gson, Class)}.</li>
- *   <li>Invokes the source's {@code upsert}/{@code delete} via an unchecked
- *       cast to {@code WritableRemoteJsonSource<JpaModel>} - justified because
- *       the entity type came from the same {@link WriteRequest} envelope that
- *       pinned the source type in {@code getWritableSources()}.</li>
+ *   <li>Buffers a fresh {@link BufferedMutation} into the target source,
+ *       carrying the attempt counter from the retry envelope (or {@code 0}
+ *       for fresh IQueue requests) so the scheduler can correctly compute
+ *       the next retry on a subsequent failure.</li>
  *   <li>Catches any {@link Throwable} from the body, logs ERROR with the
  *       full {@link WriteRequest#getRequestId()} for traceability, and
  *       continues the loop so a single bad request cannot stop the drain.</li>
  * </ol>
  *
- * <p>Exponential-backoff retry path: failed requests are pushed onto the
- * local {@link DelayQueue} with increasing delays (1m, 2m, 4m, 8m, 16m by
- * default), up to {@code maxRetryAttempts}. After the final attempt fails,
- * the request is dead-lettered to
- * {@code IMap<UUID, WriteRequest> skyblock.writes.deadletter} for operator
- * inspection. The dead-letter map is auto-created on first access.
+ * <p>Exponential-backoff retry path (Phase 6b.1 Gap 1 fix): failed commits
+ * are pushed onto the {@code skyblock.writes.retry} Hazelcast IMap as
+ * {@link RetryEnvelope} entries keyed on the original producer request id.
+ * Each entry carries the attempt counter and the absolute ready-at instant
+ * computed via {@link RetryEnvelope#computeReadyAt(Instant, int, Duration)}
+ * exponential backoff. The drain loop scans the IMap on every iteration for
+ * entries whose {@code readyAt} has elapsed, atomically removes them, and
+ * re-dispatches. Crash/restart durability: pre-existing entries in the IMap
+ * from the previous process's lifetime are picked up automatically on the
+ * first scan iteration, so in-flight retries survive a clean restart or a
+ * crash without being lost.
  *
- * <p>Restart semantics: the local {@link DelayQueue} is in-memory only, so
- * requests currently in a backoff window are lost on consumer restart. This
- * is an accepted Phase 6b trade-off; a Phase 6e follow-up could move the
- * retry state to a Hazelcast IMap with an {@code @EventListener} bootstrap
- * so in-flight retries survive restart.
+ * <p>After the retry attempt counter exceeds {@code maxRetryAttempts}, the
+ * request is dead-lettered to {@code IMap<UUID, WriteRequest> skyblock.writes.deadletter}
+ * for operator inspection. The dead-letter map is auto-created on first
+ * access.
  *
  * <p>The consumer does NOT call {@code commitBatch} itself - the
  * {@link WriteBatchScheduler} owns that responsibility on its 10s cadence.
  * Failed commits that come back from the scheduler are surfaced to this
- * consumer via {@link #scheduleRetry(DelayedWriteRequest)}.
+ * consumer via {@link #scheduleRetry(RetryEnvelope)}.
  *
  * @see WriteBatchScheduler
  * @see WritableRemoteJsonSource
- * @see DelayedWriteRequest
+ * @see RetryEnvelope
  */
 @Component
 @Log4j2
@@ -88,21 +95,21 @@ public class WriteQueueConsumer {
     /** The Hazelcast IQueue name declared in {@code infra/hazelcast/hazelcast.xml}. */
     public static final @NotNull String QUEUE_NAME = "skyblock.writes";
 
+    /**
+     * The Hazelcast IMap name used for the Phase 6b.1 durable retry state.
+     * Auto-created on first access. Survives consumer restarts so in-flight
+     * exponential-backoff retries are not lost on a crash or redeploy.
+     */
+    public static final @NotNull String RETRY_MAP_NAME = "skyblock.writes.retry";
+
     /** The Hazelcast IMap name used for the dead-letter dump. Auto-created on first access. */
     public static final @NotNull String DEADLETTER_MAP_NAME = "skyblock.writes.deadletter";
 
     private final @NotNull HazelcastInstance writeHazelcastInstance;
     private final @NotNull RemoteSkyBlockFactory factory;
     private final @NotNull Gson gson;
-    private final @NotNull Duration retryInitialDelay;
     private final int maxRetryAttempts;
     private final boolean enabled;
-
-    /**
-     * In-memory exponential-backoff retry queue. Survives the lifetime of
-     * the consumer only; restart clears it.
-     */
-    private final @NotNull DelayQueue<DelayedWriteRequest> retryQueue = new DelayQueue<>();
 
     private volatile Thread drainThread;
     private volatile boolean stopping = false;
@@ -117,7 +124,10 @@ public class WriteQueueConsumer {
         this.writeHazelcastInstance = skyBlockWriteHazelcastInstance;
         this.factory = remoteSkyBlockFactory;
         this.gson = MinecraftApi.getGson();
-        this.retryInitialDelay = Duration.ofMinutes(retryInitialDelayMinutes);
+        // retryInitialDelayMinutes is retained as a constructor parameter for
+        // backwards-compatible property binding; the actual backoff math lives in
+        // WriteBatchScheduler which owns the escalation call site and has the
+        // Duration ready when it invokes scheduleRetry.
         this.maxRetryAttempts = maxRetryAttempts;
         this.enabled = enabled;
     }
@@ -136,11 +146,19 @@ public class WriteQueueConsumer {
         if (this.drainThread != null)
             return;
 
+        // Log the retry IMap size so operators can see leftover entries from the previous
+        // process's lifetime (durable-restart resumes processing those on the first scan).
+        IMap<UUID, RetryEnvelope> retryMap = this.writeHazelcastInstance.getMap(RETRY_MAP_NAME);
+        int leftover = retryMap.size();
+
+        if (leftover > 0)
+            log.info("WriteQueueConsumer resuming with {} leftover retry entries from prior process lifetime", leftover);
+
         Thread thread = new Thread(this::drainLoop, "skyblock-write-consumer");
         thread.setDaemon(true);
         this.drainThread = thread;
         thread.start();
-        log.info("WriteQueueConsumer daemon thread started (queue='{}')", QUEUE_NAME);
+        log.info("WriteQueueConsumer daemon thread started (queue='{}' retryMap='{}')", QUEUE_NAME, RETRY_MAP_NAME);
     }
 
     /**
@@ -164,23 +182,34 @@ public class WriteQueueConsumer {
     }
 
     /**
-     * Pushes a failed write back onto the retry queue with the supplied
-     * {@link DelayedWriteRequest}. Called by {@link WriteBatchScheduler}
-     * for each failed mutation returned by a per-source {@code commitBatch}
-     * tick.
+     * Pushes a failed write back onto the durable retry IMap. Called by
+     * {@link WriteBatchScheduler} for each failed mutation returned by a
+     * per-source commit tick.
      *
-     * @param delayed the retry entry, carrying the hydrated mutation and ready-at instant
+     * <p>If the envelope's attempt counter has already exceeded
+     * {@code maxRetryAttempts}, the envelope is dead-lettered immediately
+     * instead of entering the retry IMap. Otherwise the envelope is stored
+     * under its original {@link WriteRequest#getRequestId() requestId} so
+     * subsequent retries overwrite any in-flight entry for the same producer
+     * request (dedup on id).
+     *
+     * @param envelope the retry entry, carrying the WriteRequest, attempt counter,
+     *                 and absolute ready instant
      */
-    public void scheduleRetry(@NotNull DelayedWriteRequest delayed) {
-        if (delayed.getAttempt() > this.maxRetryAttempts) {
-            this.deadLetter(delayed);
+    public void scheduleRetry(@NotNull RetryEnvelope envelope) {
+        if (envelope.getAttempt() > this.maxRetryAttempts) {
+            this.deadLetter(envelope);
             return;
         }
 
-        this.retryQueue.offer(delayed);
+        IMap<UUID, RetryEnvelope> retryMap = this.writeHazelcastInstance.getMap(RETRY_MAP_NAME);
+        retryMap.put(envelope.getRequest().getRequestId(), envelope);
+
         log.info(
-            "scheduled retry for WriteRequest {} attempt={} readyAt={}",
-            delayed.getMutation().getRequestId(), delayed.getAttempt(), delayed.getReadyAt()
+            "scheduled retry for WriteRequest {} attempt={} readyAtEpochMillis={}",
+            envelope.getRequest().getRequestId(),
+            envelope.getAttempt(),
+            envelope.getReadyAtEpochMillis()
         );
     }
 
@@ -194,18 +223,15 @@ public class WriteQueueConsumer {
 
         while (!this.stopping && !Thread.currentThread().isInterrupted()) {
             try {
-                // 1. Prefer fresh writes from the primary queue - short poll so delayed retries don't starve.
+                // 1. Prefer fresh writes from the primary queue - short poll so retry scans don't starve.
                 WriteRequest fresh = queue.poll(500, TimeUnit.MILLISECONDS);
                 if (fresh != null) {
-                    this.dispatchFresh(fresh);
+                    this.dispatch(fresh, 0);
                     continue;
                 }
 
-                // 2. Drain any ready retries from the local DelayQueue.
-                DelayedWriteRequest delayed = this.retryQueue.poll();
-                if (delayed != null) {
-                    this.dispatchRetry(delayed);
-                }
+                // 2. Opportunistically scan the retry IMap for ready entries.
+                this.drainReadyRetries();
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 break;
@@ -218,15 +244,60 @@ public class WriteQueueConsumer {
     }
 
     /**
-     * Dispatches a fresh {@link WriteRequest} from the Hazelcast IQueue.
-     * Resolves the entity class, deserializes the JSON, and buffers the
-     * resulting {@link BufferedMutation} into the matching source. Any
-     * failure is logged and the request is skipped - dispatch-time failures
-     * typically indicate schema drift (unknown class, non-JpaModel target,
-     * malformed JSON) which retrying would not fix.
+     * Scans the retry IMap once for entries whose {@code readyAt} has
+     * elapsed, atomically removes each eligible entry, and dispatches the
+     * embedded {@link WriteRequest} through the common dispatch path.
+     *
+     * <p>The scan uses {@link IMap#keySet()} to snapshot the current key set
+     * (cheap for the small retry map sizes expected in practice - at most a
+     * few tens of entries during sustained failure conditions), then checks
+     * each entry's {@code readyAt} via a per-key {@link IMap#get(Object)}.
+     * An {@code IMap.remove(key)} returning non-null confirms we won the
+     * race against any other consumer that might also be draining the map
+     * (currently a single-writer architecture, but the pattern is
+     * race-safe for future multi-consumer scale-out).
+     */
+    private void drainReadyRetries() {
+        IMap<UUID, RetryEnvelope> retryMap = this.writeHazelcastInstance.getMap(RETRY_MAP_NAME);
+
+        if (retryMap.isEmpty())
+            return;
+
+        long now = System.currentTimeMillis();
+        List<UUID> keys = new ArrayList<>(retryMap.keySet());
+
+        for (UUID key : keys) {
+            RetryEnvelope peeked = retryMap.get(key);
+
+            if (peeked == null || !peeked.isReady(now))
+                continue;
+
+            RetryEnvelope taken = retryMap.remove(key);
+
+            if (taken == null)
+                continue;
+
+            this.dispatch(taken.getRequest(), taken.getAttempt());
+        }
+    }
+
+    /**
+     * Unified dispatch path for both fresh IQueue requests ({@code attempt=0})
+     * and retry IMap entries ({@code attempt=N}). Resolves the entity class,
+     * rehydrates the entity via Gson, and buffers a {@link BufferedMutation}
+     * into the matching source with the supplied attempt counter.
+     *
+     * <p>Dispatch-time failures (unknown class, non-JpaModel, malformed JSON,
+     * missing source registration) log WARN and skip - these conditions do
+     * not heal with time, so retrying would loop forever. The
+     * {@link BufferedMutation#getAttempt() attempt} counter is propagated
+     * into the source buffer so the scheduler's escalation path can compute
+     * the next retry as {@code attempt + 1}, producing a bounded retry
+     * chain that terminates in a dead-letter after {@code maxRetryAttempts}
+     * cycles.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private void dispatchFresh(@NotNull WriteRequest request) {
+    private void dispatch(@NotNull WriteRequest request, int attempt) {
         try {
             Class<? extends JpaModel> type = request.resolveEntityType();
             WritableRemoteJsonSource source = this.factory.getWritableSources().get(type);
@@ -241,14 +312,21 @@ public class WriteQueueConsumer {
 
             JpaModel entity = request.deserializeEntity(this.gson, type);
             BufferedMutation<JpaModel> mutation = new BufferedMutation<>(
-                request.getOperation(), entity, request.getRequestId(), Instant.now()
+                request.getOperation(), entity, request.getRequestId(), Instant.now(), attempt
             );
             source.buffer(mutation);
 
-            log.info(
-                "consumed WriteRequest {} op={} type={}",
-                request.getRequestId(), request.getOperation(), type.getSimpleName()
-            );
+            if (attempt == 0) {
+                log.info(
+                    "consumed WriteRequest {} op={} type={}",
+                    request.getRequestId(), request.getOperation(), type.getSimpleName()
+                );
+            } else {
+                log.info(
+                    "re-buffered retry WriteRequest {} op={} type={} attempt={}",
+                    request.getRequestId(), request.getOperation(), type.getSimpleName(), attempt
+                );
+            }
         } catch (JpaException ex) {
             log.warn(
                 "Skipping WriteRequest {} - unable to resolve or buffer: {}",
@@ -260,81 +338,27 @@ public class WriteQueueConsumer {
     }
 
     /**
-     * Re-buffers a {@link DelayedWriteRequest} into its target source. The
-     * mutation is already hydrated and the target class is already known,
-     * so this path skips the deserialize step entirely.
+     * Pushes a fully-exhausted retry onto the dead-letter IMap for operator
+     * inspection. The dead-letter map is keyed on the original producer
+     * request id so operator queries line up with audit logs from the
+     * initial producer put.
      */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private void dispatchRetry(@NotNull DelayedWriteRequest delayed) {
+    private void deadLetter(@NotNull RetryEnvelope envelope) {
         try {
-            WritableRemoteJsonSource source = this.factory.getWritableSources().get(delayed.getEntityType());
-
-            if (source == null) {
-                log.warn(
-                    "No writable source for retry of type '{}' - dropping WriteRequest {}",
-                    delayed.getEntityType().getName(), delayed.getMutation().getRequestId()
-                );
-                return;
-            }
-
-            source.buffer(delayed.getMutation());
-
-            log.info(
-                "re-buffered retry WriteRequest {} op={} type={} attempt={}",
-                delayed.getMutation().getRequestId(),
-                delayed.getMutation().getOperation(),
-                delayed.getEntityType().getSimpleName(),
-                delayed.getAttempt()
-            );
-        } catch (JpaException ex) {
-            log.warn(
-                "Skipping retry WriteRequest {} - buffer threw: {}",
-                delayed.getMutation().getRequestId(), ex.getMessage()
-            );
-        } catch (Throwable ex) {
-            log.error(
-                "Unexpected error re-buffering retry WriteRequest {}",
-                delayed.getMutation().getRequestId(), ex
-            );
-        }
-    }
-
-    /** Pushes a fully-exhausted retry onto the dead-letter IMap for operator inspection. */
-    private void deadLetter(@NotNull DelayedWriteRequest delayed) {
-        try {
-            // Rebuild the WriteRequest envelope for the dead-letter map so operators can inspect
-            // the full producer-side payload without reaching into the in-memory mutation.
-            @SuppressWarnings({"unchecked", "rawtypes"})
-            WriteRequest envelope = switch (delayed.getMutation().getOperation()) {
-                case UPSERT -> WriteRequest.upsert(
-                    (Class) delayed.getEntityType(),
-                    (JpaModel) delayed.getMutation().getEntity(),
-                    this.gson,
-                    dev.sbs.simplifieddata.config.GitHubConfig.SOURCE_ID
-                );
-                case DELETE -> WriteRequest.delete(
-                    (Class) delayed.getEntityType(),
-                    (JpaModel) delayed.getMutation().getEntity(),
-                    this.gson,
-                    dev.sbs.simplifieddata.config.GitHubConfig.SOURCE_ID
-                );
-            };
-            // Key on the original request id so operator queries against the dead-letter map
-            // line up with audit logs from the initial producer put.
-            UUID key = delayed.getMutation().getRequestId();
+            UUID key = envelope.getRequest().getRequestId();
             IMap<UUID, WriteRequest> deadletter = this.writeHazelcastInstance.getMap(DEADLETTER_MAP_NAME);
-            deadletter.put(key, envelope);
+            deadletter.put(key, envelope.getRequest());
             log.error(
                 "DEAD-LETTER WriteRequest {} op={} type={} after {} attempts - requires operator attention",
                 key,
-                delayed.getMutation().getOperation(),
-                delayed.getEntityType().getName(),
-                delayed.getAttempt() - 1
+                envelope.getRequest().getOperation(),
+                envelope.getRequest().getEntityClassName(),
+                envelope.getAttempt() - 1
             );
         } catch (Throwable ex) {
             log.error(
-                "Failed to dead-letter WriteRequest {} (dropping it) - DelayQueue state lost on restart",
-                delayed.getMutation().getRequestId(), ex
+                "Failed to dead-letter WriteRequest {} (dropping it) - retry state not preserved",
+                envelope.getRequest().getRequestId(), ex
             );
         }
     }

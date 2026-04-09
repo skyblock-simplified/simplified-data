@@ -139,44 +139,71 @@ class WriteQueueConsumerTest {
         WriteQueueConsumer consumer = newConsumer();
 
         ZodiacEvent event = newEvent("YEAR_OF_THE_DOLPHIN", "Year of the Dolphin", 415);
-        BufferedMutation<ZodiacEvent> mutation = new BufferedMutation<>(
-            WriteRequest.Operation.UPSERT, event, UUID.randomUUID(), Instant.now()
-        );
-        DelayedWriteRequest delayed = new DelayedWriteRequest(ZodiacEvent.class, mutation, 10, Instant.now());
+        WriteRequest request = WriteRequest.upsert(ZodiacEvent.class, event, MinecraftApi.getGson(), "skyblock-data");
+        RetryEnvelope envelope = RetryEnvelope.forRetry(request, 10, Instant.now());
 
-        consumer.scheduleRetry(delayed);
+        consumer.scheduleRetry(envelope);
 
         IMap<UUID, WriteRequest> deadletter = this.hazelcast.getMap(WriteQueueConsumer.DEADLETTER_MAP_NAME);
         assertThat(deadletter.size(), equalTo(1));
-        assertThat(deadletter.containsKey(mutation.getRequestId()), is(true));
+        assertThat(deadletter.containsKey(request.getRequestId()), is(true));
     }
 
     @Test
-    @DisplayName("scheduleRetry within cap inserts into the retry queue without touching the dead-letter map")
+    @DisplayName("scheduleRetry within cap puts into the retry IMap and the drain loop picks it up once ready")
     void retryWithinCap() throws Exception {
         WriteQueueConsumer consumer = newConsumer();
 
         ZodiacEvent event = newEvent("YEAR_OF_THE_OCTOPUS", "Year of the Octopus", 416);
-        BufferedMutation<ZodiacEvent> mutation = new BufferedMutation<>(
-            WriteRequest.Operation.UPSERT, event, UUID.randomUUID(), Instant.now()
-        );
-        // Set readyAt far in the past so the retry is immediately eligible.
-        DelayedWriteRequest delayed = new DelayedWriteRequest(
-            ZodiacEvent.class, mutation, 1, Instant.now().minusSeconds(1)
-        );
+        WriteRequest request = WriteRequest.upsert(ZodiacEvent.class, event, MinecraftApi.getGson(), "skyblock-data");
+        // Set readyAt in the past so the retry is immediately eligible on the next drain scan.
+        RetryEnvelope envelope = RetryEnvelope.forRetry(request, 1, Instant.now().minusSeconds(1));
 
-        consumer.scheduleRetry(delayed);
+        consumer.scheduleRetry(envelope);
 
         IMap<UUID, WriteRequest> deadletter = this.hazelcast.getMap(WriteQueueConsumer.DEADLETTER_MAP_NAME);
         assertThat(deadletter.size(), equalTo(0));
 
-        // Start the consumer so it drains the retry queue.
+        IMap<UUID, RetryEnvelope> retryMap = this.hazelcast.getMap(WriteQueueConsumer.RETRY_MAP_NAME);
+        assertThat(retryMap.size(), equalTo(1));
+        assertThat(retryMap.containsKey(request.getRequestId()), is(true));
+
+        // Start the consumer so its drain loop picks up the eligible retry.
         consumer.start();
         waitUntil(() -> !this.recordingSource.bufferedMutations.isEmpty(), Duration.ofSeconds(5));
         consumer.stop();
 
         assertThat(this.recordingSource.bufferedMutations, hasSize(1));
-        assertThat(this.recordingSource.bufferedMutations.get(0).getRequestId(), equalTo(mutation.getRequestId()));
+        assertThat(this.recordingSource.bufferedMutations.get(0).getRequestId(), equalTo(request.getRequestId()));
+        // The drained retry should reflect the envelope's attempt counter.
+        assertThat(this.recordingSource.bufferedMutations.get(0).getAttempt(), equalTo(1));
+        // The retry IMap should be empty after the drain consumed the entry.
+        assertThat(retryMap.size(), equalTo(0));
+    }
+
+    @Test
+    @DisplayName("Retry IMap entries surviving a prior lifetime are picked up after start()")
+    void retryImapRestartDurability() throws Exception {
+        // Put an entry directly into the IMap WITHOUT going through scheduleRetry,
+        // simulating a restart where the previous process's entry is still in the map.
+        ZodiacEvent event = newEvent("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
+        WriteRequest request = WriteRequest.upsert(ZodiacEvent.class, event, MinecraftApi.getGson(), "skyblock-data");
+        RetryEnvelope envelope = RetryEnvelope.forRetry(request, 2, Instant.now().minusSeconds(1));
+
+        IMap<UUID, RetryEnvelope> retryMap = this.hazelcast.getMap(WriteQueueConsumer.RETRY_MAP_NAME);
+        retryMap.put(request.getRequestId(), envelope);
+
+        // NOW create + start the consumer. This simulates a fresh process that didn't
+        // put the entry itself; the drain loop's first scan iteration should still pick it up.
+        WriteQueueConsumer consumer = newConsumer();
+        consumer.start();
+        waitUntil(() -> !this.recordingSource.bufferedMutations.isEmpty(), Duration.ofSeconds(5));
+        consumer.stop();
+
+        assertThat(this.recordingSource.bufferedMutations, hasSize(1));
+        assertThat(this.recordingSource.bufferedMutations.get(0).getRequestId(), equalTo(request.getRequestId()));
+        assertThat(this.recordingSource.bufferedMutations.get(0).getAttempt(), equalTo(2));
+        assertThat(retryMap.size(), equalTo(0));
     }
 
     @Test

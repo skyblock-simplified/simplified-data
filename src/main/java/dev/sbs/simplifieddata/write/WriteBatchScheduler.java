@@ -3,11 +3,13 @@ package dev.sbs.simplifieddata.write;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.simplifieddata.config.GitHubConfig;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.persistence.WritableRemoteJsonSource;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.collection.ConcurrentMap;
 import dev.simplified.persistence.JpaModel;
+import dev.simplified.persistence.source.WriteRequest;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.log4j.Log4j2;
 import org.jetbrains.annotations.NotNull;
@@ -267,9 +269,16 @@ public class WriteBatchScheduler {
 
     /**
      * Converts every buffered mutation inside a {@link StagedBatch} into a
-     * {@link DelayedWriteRequest} with {@code attempt=1} and pushes each
-     * entry onto the consumer's retry queue. Used by the Git Data failure
-     * escalation path.
+     * {@link RetryEnvelope} with {@code attempt = mutation.getAttempt() + 1}
+     * and pushes each envelope onto the consumer's durable retry IMap via
+     * {@link WriteQueueConsumer#scheduleRetry(RetryEnvelope)}. Used by the
+     * Git Data failure escalation path.
+     *
+     * <p>Reading {@code mutation.getAttempt()} (rather than hardcoding
+     * {@code attempt=1}) is the Phase 6b.1 Gap 1 fix: a mutation that was
+     * itself a retry (attempt=N) escalates to attempt=N+1, which terminates
+     * correctly at {@code maxRetryAttempts} instead of looping forever
+     * through a chain of "first retries".
      */
     private void escalateStagedBatch(
         @NotNull Class<? extends JpaModel> type,
@@ -277,18 +286,15 @@ public class WriteBatchScheduler {
     ) {
         Instant now = Instant.now();
 
-        for (BufferedMutation<?> mutation : staged.getMutationsUntyped()) {
-            int attempt = 1;
-            Instant readyAt = DelayedWriteRequest.readyAtFor(now, attempt, this.retryInitialDelay);
-            this.consumer.scheduleRetry(new DelayedWriteRequest(type, mutation, attempt, readyAt));
-        }
+        for (BufferedMutation<?> mutation : staged.getMutationsUntyped())
+            this.consumer.scheduleRetry(this.buildRetryEnvelope(type, mutation, now));
     }
 
     /**
      * Converts every failed {@link BufferedMutation} in a
      * {@link WritableRemoteJsonSource.CommitBatchResult} into a
-     * {@link DelayedWriteRequest} and pushes it onto the consumer's retry
-     * queue. Used by the Contents API failure escalation path.
+     * {@link RetryEnvelope} and pushes it onto the consumer's retry IMap.
+     * Used by the Contents API failure escalation path.
      */
     private void escalateCommitFailures(
         @NotNull Class<? extends JpaModel> type,
@@ -296,16 +302,107 @@ public class WriteBatchScheduler {
     ) {
         Instant now = Instant.now();
 
-        for (BufferedMutation<?> mutation : result.getFailures()) {
-            int attempt = 1;
-            Instant readyAt = DelayedWriteRequest.readyAtFor(now, attempt, this.retryInitialDelay);
-            this.consumer.scheduleRetry(new DelayedWriteRequest(type, mutation, attempt, readyAt));
-        }
+        for (BufferedMutation<?> mutation : result.getFailures())
+            this.consumer.scheduleRetry(this.buildRetryEnvelope(type, mutation, now));
 
         log.warn(
-            "Escalated {} failed mutations for type '{}' to retry queue",
+            "Escalated {} failed mutations for type '{}' to retry IMap",
             result.getFailures().size(), type.getSimpleName()
         );
+    }
+
+    /**
+     * Rebuilds a {@link WriteRequest} envelope from a failed
+     * {@link BufferedMutation}, wraps it in a {@link RetryEnvelope} with
+     * {@code attempt = mutation.getAttempt() + 1}, and computes the
+     * exponential-backoff ready instant via
+     * {@link RetryEnvelope#computeReadyAt(Instant, int, Duration)}.
+     *
+     * <p>The original producer request id is preserved byte-identically
+     * because {@link BufferedMutation#getRequestId()} carries the id from
+     * the initial dispatch forward through every retry cycle. Dead-letter
+     * queries keyed on requestId correlate end-to-end across the producer
+     * put, the initial consumer dispatch, every retry attempt, and the
+     * eventual dead-letter entry.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private @NotNull RetryEnvelope buildRetryEnvelope(
+        @NotNull Class<? extends JpaModel> type,
+        @NotNull BufferedMutation<?> mutation,
+        @NotNull Instant now
+    ) {
+        int nextAttempt = mutation.getAttempt() + 1;
+        Instant readyAt = RetryEnvelope.computeReadyAt(now, nextAttempt, this.retryInitialDelay);
+
+        WriteRequest request = switch (mutation.getOperation()) {
+            case UPSERT -> WriteRequest.upsert(
+                (Class) type,
+                (JpaModel) mutation.getEntity(),
+                MinecraftApi.getGson(),
+                GitHubConfig.SOURCE_ID
+            );
+            case DELETE -> WriteRequest.delete(
+                (Class) type,
+                (JpaModel) mutation.getEntity(),
+                MinecraftApi.getGson(),
+                GitHubConfig.SOURCE_ID
+            );
+        };
+        // Producer-side WriteRequest.upsert/delete generate a fresh UUID for
+        // each call, but for retries we need to preserve the original
+        // producer's request id so dead-letter and audit trails stay
+        // correlated. The WriteRequest class doesn't expose a setter, so we
+        // mirror the producer's request id via a rebuild that resets it
+        // through reflection.
+        request = rebuildWithRequestId(request, mutation.getRequestId());
+        return RetryEnvelope.forRetry(request, nextAttempt, readyAt);
+    }
+
+    /**
+     * Reflection-based rebuilder that produces a new {@link WriteRequest}
+     * with the caller-supplied {@code requestId} substituted for the
+     * randomly-generated id from
+     * {@link WriteRequest#upsert(Class, JpaModel, com.google.gson.Gson, String) WriteRequest.upsert}.
+     *
+     * <p>The persistence library intentionally makes {@link WriteRequest}'s
+     * constructor private to enforce factory-method construction, so this
+     * scheduler-local helper uses reflection to bypass that constraint for
+     * the retry correlation case. The library's {@code WriteRequest} is
+     * {@code final} with {@code private final} fields, so reflection is
+     * the only way to produce a new instance with a different requestId
+     * without adding a library-side API.
+     *
+     * <p>A future persistence library revision could add a
+     * {@code WriteRequest.withRequestId(UUID)} helper or an overloaded
+     * factory method that takes an explicit requestId, which would let us
+     * drop this helper. For now the reflection path is localized and
+     * well-contained.
+     */
+    private static @NotNull WriteRequest rebuildWithRequestId(@NotNull WriteRequest source, @NotNull java.util.UUID requestId) {
+        try {
+            java.lang.reflect.Constructor<WriteRequest> ctor = WriteRequest.class.getDeclaredConstructor(
+                java.util.UUID.class,
+                Instant.class,
+                WriteRequest.Operation.class,
+                String.class,
+                String.class,
+                String.class
+            );
+            ctor.setAccessible(true);
+            return ctor.newInstance(
+                requestId,
+                source.getTimestamp(),
+                source.getOperation(),
+                source.getEntityClassName(),
+                source.getEntityJson(),
+                source.getSourceId()
+            );
+        } catch (Exception ex) {
+            throw new IllegalStateException(
+                "Failed to rebuild WriteRequest with preserved requestId - is the persistence library constructor signature still compatible?",
+                ex
+            );
+        }
     }
 
 }

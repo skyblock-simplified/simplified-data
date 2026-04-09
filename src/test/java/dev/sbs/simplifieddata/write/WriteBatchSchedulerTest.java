@@ -108,14 +108,42 @@ class WriteBatchSchedulerTest {
         scheduler.tick();
 
         assertThat(this.consumer.getRetries(), hasSize(2));
-        for (DelayedWriteRequest retry : this.consumer.getRetries()) {
-            assertThat(retry.getEntityType(), equalTo(ZodiacEvent.class));
+        long nowMillis = Instant.now().toEpochMilli();
+        for (RetryEnvelope retry : this.consumer.getRetries()) {
+            assertThat(retry.getRequest().getEntityClassName(), equalTo(ZodiacEvent.class.getName()));
             assertThat(retry.getAttempt(), equalTo(1));
-            assertThat(retry.getReadyAt(), notNullValue());
             // Verify that the readyAt is at least close to now + 1 minute (with some tolerance for scheduling jitter).
-            long diffSeconds = java.time.Duration.between(Instant.now(), retry.getReadyAt()).toSeconds();
+            long diffSeconds = (retry.getReadyAtEpochMillis() - nowMillis) / 1000L;
             assertThat(diffSeconds > 50 && diffSeconds < 70, is(true));
         }
+    }
+
+    @Test
+    @DisplayName("Phase 6b.1 Gap 1: a mutation with attempt=2 escalates to attempt=3 (not 1)")
+    void tickEscalatesIncrementsAttemptCounter() {
+        RecordingSource<ZodiacEvent> source = new RecordingSource<>(ZodiacEvent.class);
+        // Build a BufferedMutation that was already on its 2nd retry cycle.
+        ZodiacEvent event = new ZodiacEvent();
+        BufferedMutation<ZodiacEvent> priorRetry = new BufferedMutation<>(
+            WriteRequest.Operation.UPSERT,
+            event,
+            UUID.randomUUID(),
+            Instant.now(),
+            2  // attempt counter: this mutation has already failed twice
+        );
+        source.nextResult = buildFailed(List.of(priorRetry));
+        this.factory.register(ZodiacEvent.class, source);
+
+        WriteBatchScheduler scheduler = new WriteBatchScheduler(this.factory, this.consumer, stubGitDataService(), 1L, WriteMode.CONTENTS);
+        scheduler.tick();
+
+        assertThat(this.consumer.getRetries(), hasSize(1));
+        // The next retry must be attempt=3 (2 + 1), not attempt=1.
+        assertThat(this.consumer.getRetries().get(0).getAttempt(), equalTo(3));
+        // Exponential-backoff readyAt for attempt=3 is now + 1min * 2^(3-1) = now + 4min.
+        long nowMillis = Instant.now().toEpochMilli();
+        long diffSeconds = (this.consumer.getRetries().get(0).getReadyAtEpochMillis() - nowMillis) / 1000L;
+        assertThat(diffSeconds > 230 && diffSeconds < 250, is(true));
     }
 
     @Test
@@ -135,7 +163,7 @@ class WriteBatchSchedulerTest {
         assertThat(okSource.commitCount, equalTo(1));
         assertThat(badSource.commitCount, equalTo(1));
         assertThat(this.consumer.getRetries(), hasSize(1));
-        assertThat(this.consumer.getRetries().get(0).getEntityType(), equalTo(OtherModel.class));
+        assertThat(this.consumer.getRetries().get(0).getRequest().getEntityClassName(), equalTo(OtherModel.class.getName()));
     }
 
     @Test
@@ -477,18 +505,18 @@ class WriteBatchSchedulerTest {
 
     private static final class RecordingConsumer extends WriteQueueConsumer {
 
-        private final List<DelayedWriteRequest> retries = new ArrayList<>();
+        private final List<RetryEnvelope> retries = new ArrayList<>();
 
         RecordingConsumer() {
             super(noopHazelcastProxy(), new StubFactory(), 1L, 5, false);
         }
 
         @Override
-        public void scheduleRetry(@NotNull DelayedWriteRequest delayed) {
-            this.retries.add(delayed);
+        public void scheduleRetry(@NotNull RetryEnvelope envelope) {
+            this.retries.add(envelope);
         }
 
-        List<DelayedWriteRequest> getRetries() {
+        List<RetryEnvelope> getRetries() {
             return this.retries;
         }
 
