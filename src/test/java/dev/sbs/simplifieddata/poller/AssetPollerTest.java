@@ -196,8 +196,8 @@ class AssetPollerTest {
     }
 
     @Test
-    @DisplayName("Phase 5.5: first poll triggers refresh for every model class in the initial manifest")
-    void firstPollTriggersRefreshForInitialManifestClasses() {
+    @DisplayName("Phase 5.6: first poll cold-start skips the refresh trigger even though every manifest entry is newly added")
+    void firstPollColdBootSkipsRefreshTrigger() {
         GitHubCommit commit = parseCommit("sha-one");
         this.contract.commit = commit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
@@ -206,19 +206,21 @@ class AssetPollerTest {
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
 
-        assertThat(this.refreshTrigger.invocations, hasSize(1));
-        // sampleManifest() references real minecraft-api classes so Class.forName resolves.
-        assertThat(
-            this.refreshTrigger.lastTargets(),
-            containsInAnyOrder(
-                dev.sbs.minecraftapi.persistence.model.Item.class,
-                dev.sbs.minecraftapi.persistence.model.MobType.class
-            )
-        );
+        // JpaSession.cacheRepositories() already hydrated every SkyBlock repository from
+        // the remote source during context init, so firing the refresh for all 41 added
+        // entries would be wasted GitHub budget. The Phase 5.6 skip keeps the cold-boot
+        // cost at just the 41 cacheRepositories calls instead of doubling to ~82.
+        assertThat(this.refreshTrigger.invocations, hasSize(0));
+        // State table still populated normally; this test asserts the REFRESH skip only.
+        this.assetSession.with(session -> {
+            ExternalAssetState state = session.find(ExternalAssetState.class, "skyblock-data");
+            assertThat(state, is(notNullValue()));
+            assertThat(state.getCommitSha().orElse(null), equalTo("sha-one"));
+        });
     }
 
     @Test
-    @DisplayName("Phase 5.5: change poll triggers refresh only for the models whose content changed")
+    @DisplayName("Phase 5.5 + 5.6: change poll triggers refresh only for the models whose content changed (cold boot skipped)")
     void changePollTriggersRefreshOnlyForChangedModels() {
         GitHubCommit firstCommit = parseCommit("sha-one");
         this.contract.commit = firstCommit;
@@ -228,7 +230,11 @@ class AssetPollerTest {
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
 
-        // Second cycle: items hash flipped, mobs hash unchanged. Only items should refresh.
+        // Phase 5.6: the cold-boot startup poll does NOT fire the refresh trigger.
+        assertThat(this.refreshTrigger.invocations, hasSize(0));
+
+        // Second cycle: items hash flipped, mobs hash unchanged. Only items should refresh,
+        // and this IS a warm-state poll so the trigger fires.
         GitHubCommit secondCommit = parseCommit("sha-two");
         this.contract.commit = secondCommit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-two", "ccc", "bbb"));
@@ -236,15 +242,15 @@ class AssetPollerTest {
 
         poller.scheduledPoll();
 
-        assertThat(this.refreshTrigger.invocations, hasSize(2));
+        assertThat(this.refreshTrigger.invocations, hasSize(1));
         assertThat(
-            this.refreshTrigger.invocations.get(1),
+            this.refreshTrigger.invocations.get(0),
             contains(dev.sbs.minecraftapi.persistence.model.Item.class)
         );
     }
 
     @Test
-    @DisplayName("Phase 5.5: no-change poll does not invoke the refresh trigger")
+    @DisplayName("Phase 5.5 + 5.6: no-change poll does not invoke the refresh trigger, and neither does cold boot")
     void noChangePollDoesNotInvokeRefreshTrigger() {
         GitHubCommit commit = parseCommit("sha-one");
         this.contract.commit = commit;
@@ -258,23 +264,44 @@ class AssetPollerTest {
         this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
         poller.scheduledPoll();
 
-        // Exactly one invocation from the initial manifest, not a second one for the no-change cycle.
-        assertThat(this.refreshTrigger.invocations, hasSize(1));
+        // Zero invocations: the cold-boot startup poll is Phase 5.6 skipped, and the
+        // scheduled no-change poll short-circuits via recordNoChange before any trigger call.
+        assertThat(this.refreshTrigger.invocations, hasSize(0));
     }
 
     @Test
-    @DisplayName("Phase 5.5: unknown model_class is skipped with a WARN and refresh still fires for resolvable entries")
+    @DisplayName("Phase 5.5 + 5.6: unknown model_class is skipped with a WARN and refresh still fires for resolvable entries on a warm-state change poll")
     void unknownModelClassIsSkipped() {
-        GitHubCommit commit = parseCommit("sha-one");
-        this.contract.commit = commit;
+        // Establish warm state via a cold-boot poll that Phase 5.6 does not fire the trigger for.
+        GitHubCommit firstCommit = parseCommit("sha-one");
+        this.contract.commit = firstCommit;
         this.contract.fileContents.put(
             "data/v1/index.json",
             manifestWithModelClass("sha-one", "dev.sbs.minecraftapi.persistence.model.Item", "com.example.GhostModel")
         );
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), firstCommit);
 
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
+
+        // Phase 5.6 cold-boot skip: no invocation yet.
+        assertThat(this.refreshTrigger.invocations, hasSize(0));
+
+        // Second cycle: content hashes flip for both entries, simulating a new commit.
+        // The warm-state path runs the refresh trigger and the unknown FQCN is skipped.
+        GitHubCommit secondCommit = parseCommit("sha-two");
+        this.contract.commit = secondCommit;
+        this.contract.fileContents.put(
+            "data/v1/index.json",
+            manifestWithModelClassAndHashes(
+                "sha-two",
+                "dev.sbs.minecraftapi.persistence.model.Item", "ccc",
+                "com.example.GhostModel", "ddd"
+            )
+        );
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-two\"")), secondCommit);
+
+        poller.scheduledPoll();
 
         assertThat(this.refreshTrigger.invocations, hasSize(1));
         // Only the resolvable FQCN makes it through; the ghost is logged and skipped.
@@ -285,24 +312,36 @@ class AssetPollerTest {
     }
 
     @Test
-    @DisplayName("Phase 5.5: refresh trigger failure is isolated and does not crash the poll cycle")
+    @DisplayName("Phase 5.5 + 5.6: refresh trigger failure on a warm-state change poll is isolated and does not crash the cycle")
     void refreshTriggerFailureIsIsolated() {
-        GitHubCommit commit = parseCommit("sha-one");
-        this.contract.commit = commit;
+        // Cold-boot startup - Phase 5.6 skip, trigger not fired.
+        GitHubCommit firstCommit = parseCommit("sha-one");
+        this.contract.commit = firstCommit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
-        this.refreshTrigger.nextFailure = new RuntimeException("refresh failed for test");
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), firstCommit);
 
         AssetPoller poller = newPoller(true);
-        // The failure is swallowed by the poller's triggerRefresh try/catch; the poll cycle
-        // returns normally and the state table still carries the freshly-written commit sha.
         poller.onApplicationReady();
+        assertThat(this.refreshTrigger.invocations, hasSize(0));
+
+        // Second cycle: fresh commit + fresh items hash, triggering the refresh on the
+        // warm-state path. Arm the recording trigger to throw, and verify the poller
+        // catches and swallows the exception while the state row still commits cleanly.
+        GitHubCommit secondCommit = parseCommit("sha-two");
+        this.contract.commit = secondCommit;
+        this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-two", "ccc", "bbb"));
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-two\"")), secondCommit);
+        this.refreshTrigger.nextFailure = new RuntimeException("refresh failed for test");
+
+        poller.scheduledPoll();
 
         this.assetSession.with(session -> {
             ExternalAssetState state = session.find(ExternalAssetState.class, "skyblock-data");
             assertThat(state, is(notNullValue()));
-            assertThat(state.getCommitSha().orElse(null), equalTo("sha-one"));
+            assertThat(state.getCommitSha().orElse(null), equalTo("sha-two"));
         });
+        // One invocation: the warm-state change poll. The thrown exception was caught
+        // inside triggerRefresh so the poll cycle returned normally.
         assertThat(this.refreshTrigger.invocations, hasSize(1));
     }
 
@@ -417,6 +456,16 @@ class AssetPollerTest {
         @NotNull String itemsModelClass,
         @NotNull String mobsModelClass
     ) {
+        return manifestWithModelClassAndHashes(commitSha, itemsModelClass, "aaa", mobsModelClass, "bbb");
+    }
+
+    private static @NotNull String manifestWithModelClassAndHashes(
+        @NotNull String commitSha,
+        @NotNull String itemsModelClass,
+        @NotNull String itemsSha,
+        @NotNull String mobsModelClass,
+        @NotNull String mobsSha
+    ) {
         return """
             {
               "version": 1,
@@ -429,7 +478,7 @@ class AssetPollerTest {
                   "category": "items",
                   "table_name": "item",
                   "model_class": "%s",
-                  "content_sha256": "aaa",
+                  "content_sha256": "%s",
                   "bytes": 10,
                   "has_extra": false
                 },
@@ -438,13 +487,13 @@ class AssetPollerTest {
                   "category": "mobs",
                   "table_name": "mob",
                   "model_class": "%s",
-                  "content_sha256": "bbb",
+                  "content_sha256": "%s",
                   "bytes": 20,
                   "has_extra": false
                 }
               ]
             }
-            """.formatted(commitSha, itemsModelClass, mobsModelClass);
+            """.formatted(commitSha, itemsModelClass, itemsSha, mobsModelClass, mobsSha);
     }
 
     private static @NotNull GitHubCommit parseCommit(@NotNull String sha) {

@@ -220,6 +220,13 @@ public class AssetPoller {
             ExternalAssetState currentState = this.loadCurrentState();
             String storedEtag = currentState.getEtag().orElse(null);
             String storedCommitSha = currentState.getCommitSha().orElse(null);
+            // Phase 5.6: detect cold-boot start where no prior state exists. On fresh boot
+            // the diff will mark every manifest entry as "added", which would fire the
+            // Phase 5.5 refresh trigger for all 41 models. That is wasted work because
+            // JpaSession.cacheRepositories() already hydrated every repository from the
+            // remote source during Spring context initialization. Capturing the flag
+            // BEFORE any state write lets us skip the trigger on this exact path.
+            boolean coldBoot = storedCommitSha == null;
 
             Optional<CommitProbe> probe = this.probeLatestCommit();
 
@@ -258,6 +265,15 @@ public class AssetPoller {
             );
 
             this.applyDiff(fresh, manifestSnapshot, diff);
+
+            if (coldBoot) {
+                log.info(
+                    "AssetPoller source='{}' - first-boot cold-start: skipping Phase 5.5 refresh trigger for {} added entries (JpaSession.cacheRepositories() already hydrated the SkyBlock session from the remote source)",
+                    this.sourceId, diff.getAdded().size()
+                );
+            } else {
+                this.triggerRefresh(diff);
+            }
         } catch (SkyBlockDataException ex) {
             log.warn(
                 "AssetPoller source='{}' - GitHub call failed (HTTP {}): {} (primaryRateLimit={}, secondaryRateLimit={}, permissions={})",
@@ -504,8 +520,6 @@ public class AssetPoller {
             "AssetPoller source='{}' - state written: commitSha='{}' contentSha256='{}' lastSuccessAt={}",
             this.sourceId, probe.commitSha(), snapshot.contentSha256(), now
         );
-
-        this.triggerRefresh(diff);
     }
 
     /**
