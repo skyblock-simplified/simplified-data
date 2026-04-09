@@ -16,6 +16,7 @@ import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.collection.ConcurrentMap;
 import dev.simplified.persistence.JpaConfig;
+import dev.simplified.persistence.JpaModel;
 import dev.simplified.persistence.JpaSession;
 import dev.simplified.persistence.RepositoryFactory;
 import dev.simplified.persistence.SessionManager;
@@ -31,15 +32,21 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
@@ -77,6 +84,7 @@ class AssetPollerTest {
     private JpaSession assetSession;
     private StubContract contract;
     private StubLastResponseAccessor accessor;
+    private RecordingRefreshTrigger refreshTrigger;
 
     @BeforeEach
     void setUp() {
@@ -92,6 +100,7 @@ class AssetPollerTest {
 
         this.contract = new StubContract();
         this.accessor = new StubLastResponseAccessor();
+        this.refreshTrigger = new RecordingRefreshTrigger();
 
         ETagContext.clear();
     }
@@ -189,6 +198,117 @@ class AssetPollerTest {
     }
 
     @Test
+    @DisplayName("Phase 5.5: first poll triggers refresh for every model class in the initial manifest")
+    void firstPollTriggersRefreshForInitialManifestClasses() {
+        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
+        this.contract.commitList = commits;
+        this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+
+        AssetPoller poller = newPoller(true);
+        poller.onApplicationReady();
+
+        assertThat(this.refreshTrigger.invocations, hasSize(1));
+        // sampleManifest() references real minecraft-api classes so Class.forName resolves.
+        assertThat(
+            this.refreshTrigger.lastTargets(),
+            containsInAnyOrder(
+                dev.sbs.minecraftapi.persistence.model.Item.class,
+                dev.sbs.minecraftapi.persistence.model.MobType.class
+            )
+        );
+    }
+
+    @Test
+    @DisplayName("Phase 5.5: change poll triggers refresh only for the models whose content changed")
+    void changePollTriggersRefreshOnlyForChangedModels() {
+        ConcurrentList<GitHubCommit> firstCommits = parseCommits("sha-one");
+        this.contract.commitList = firstCommits;
+        this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), firstCommits);
+
+        AssetPoller poller = newPoller(true);
+        poller.onApplicationReady();
+
+        // Second cycle: items hash flipped, mobs hash unchanged. Only items should refresh.
+        ConcurrentList<GitHubCommit> secondCommits = parseCommits("sha-two");
+        this.contract.commitList = secondCommits;
+        this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-two", "ccc", "bbb"));
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-two\"")), secondCommits);
+
+        poller.scheduledPoll();
+
+        assertThat(this.refreshTrigger.invocations, hasSize(2));
+        assertThat(
+            this.refreshTrigger.invocations.get(1),
+            contains(dev.sbs.minecraftapi.persistence.model.Item.class)
+        );
+    }
+
+    @Test
+    @DisplayName("Phase 5.5: no-change poll does not invoke the refresh trigger")
+    void noChangePollDoesNotInvokeRefreshTrigger() {
+        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
+        this.contract.commitList = commits;
+        this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+
+        AssetPoller poller = newPoller(true);
+        poller.onApplicationReady();
+
+        // Second cycle: same commit sha, expecting the early-return recordNoChange path.
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        poller.scheduledPoll();
+
+        // Exactly one invocation from the initial manifest, not a second one for the no-change cycle.
+        assertThat(this.refreshTrigger.invocations, hasSize(1));
+    }
+
+    @Test
+    @DisplayName("Phase 5.5: unknown model_class is skipped with a WARN and refresh still fires for resolvable entries")
+    void unknownModelClassIsSkipped() {
+        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
+        this.contract.commitList = commits;
+        this.contract.fileContents.put(
+            "data/v1/index.json",
+            manifestWithModelClass("sha-one", "dev.sbs.minecraftapi.persistence.model.Item", "com.example.GhostModel")
+        );
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+
+        AssetPoller poller = newPoller(true);
+        poller.onApplicationReady();
+
+        assertThat(this.refreshTrigger.invocations, hasSize(1));
+        // Only the resolvable FQCN makes it through; the ghost is logged and skipped.
+        assertThat(
+            this.refreshTrigger.lastTargets(),
+            contains(dev.sbs.minecraftapi.persistence.model.Item.class)
+        );
+    }
+
+    @Test
+    @DisplayName("Phase 5.5: refresh trigger failure is isolated and does not crash the poll cycle")
+    void refreshTriggerFailureIsIsolated() {
+        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
+        this.contract.commitList = commits;
+        this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        this.refreshTrigger.nextFailure = new RuntimeException("refresh failed for test");
+
+        AssetPoller poller = newPoller(true);
+        // The failure is swallowed by the poller's triggerRefresh try/catch; the poll cycle
+        // returns normally and the state table still carries the freshly-written commit sha.
+        poller.onApplicationReady();
+
+        this.assetSession.with(session -> {
+            ExternalAssetState state = session.find(ExternalAssetState.class, "skyblock-data");
+            assertThat(state, is(notNullValue()));
+            assertThat(state.getCommitSha().orElse(null), equalTo("sha-one"));
+        });
+        assertThat(this.refreshTrigger.invocations, hasSize(1));
+    }
+
+    @Test
     @DisplayName("304 short-circuit bumps lastCheckedAt and skips manifest fetch")
     void shortCircuit304() {
         ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
@@ -252,7 +372,7 @@ class AssetPollerTest {
     // --- helpers --- //
 
     private @NotNull AssetPoller newPoller(boolean pollEnabled) {
-        return new AssetPoller(this.assetSession, this.contract, this.accessor, "skyblock-data", pollEnabled);
+        return new AssetPoller(this.assetSession, this.refreshTrigger, this.contract, this.accessor, "skyblock-data", pollEnabled);
     }
 
     private static @NotNull String sampleManifest(@NotNull String commitSha, @NotNull String itemsSha, @NotNull String mobsSha) {
@@ -284,6 +404,46 @@ class AssetPollerTest {
               ]
             }
             """.formatted(commitSha, itemsSha, mobsSha);
+    }
+
+    /**
+     * Variant of {@link #sampleManifest} that lets callers pin arbitrary {@code model_class}
+     * FQCNs on the two manifest entries. Used by the Phase 5.5 unknown-class test to inject
+     * a non-existent FQCN alongside a resolvable one.
+     */
+    private static @NotNull String manifestWithModelClass(
+        @NotNull String commitSha,
+        @NotNull String itemsModelClass,
+        @NotNull String mobsModelClass
+    ) {
+        return """
+            {
+              "version": 1,
+              "generated_at": "2026-04-07T00:00:00Z",
+              "commit_sha": "%s",
+              "count": 2,
+              "files": [
+                {
+                  "path": "data/v1/items/items.json",
+                  "category": "items",
+                  "table_name": "item",
+                  "model_class": "%s",
+                  "content_sha256": "aaa",
+                  "bytes": 10,
+                  "has_extra": false
+                },
+                {
+                  "path": "data/v1/mobs/mobs.json",
+                  "category": "mobs",
+                  "table_name": "mob",
+                  "model_class": "%s",
+                  "content_sha256": "bbb",
+                  "bytes": 20,
+                  "has_extra": false
+                }
+              ]
+            }
+            """.formatted(commitSha, itemsModelClass, mobsModelClass);
     }
 
     private static @NotNull ConcurrentList<GitHubCommit> parseCommits(@NotNull String sha) {
@@ -410,6 +570,38 @@ class AssetPollerTest {
         @Override
         public @NotNull Optional<Response<?>> getLastResponse() {
             return Optional.ofNullable(this.next);
+        }
+
+    }
+
+    /**
+     * Hand-rolled {@link RefreshTrigger} stub that records each invocation's target set.
+     * Use {@link #invocations} to assert how many times the poller fired the refresh and
+     * {@link #lastTargets} to assert the specific class set of the most recent call.
+     * Setting {@link #nextFailure} makes the next {@code refresh} call throw, which exercises
+     * the poller's isolation {@code try/catch}.
+     */
+    private static final class RecordingRefreshTrigger implements RefreshTrigger {
+
+        private final @NotNull List<Set<Class<? extends JpaModel>>> invocations = new ArrayList<>();
+        private @Nullable RuntimeException nextFailure;
+
+        @Override
+        public void refresh(@NotNull Collection<Class<? extends JpaModel>> models) {
+            this.invocations.add(new LinkedHashSet<>(models));
+
+            if (this.nextFailure != null) {
+                RuntimeException toThrow = this.nextFailure;
+                this.nextFailure = null;
+                throw toThrow;
+            }
+        }
+
+        @NotNull Set<Class<? extends JpaModel>> lastTargets() {
+            if (this.invocations.isEmpty())
+                throw new IllegalStateException("RecordingRefreshTrigger was never invoked");
+
+            return this.invocations.get(this.invocations.size() - 1);
         }
 
     }

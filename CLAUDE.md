@@ -38,7 +38,9 @@ GitHub asset polling, and the skyblock-data repo integration.
 | 4a | done | Library-side Source interface foundation (Simplified-Dev/persistence) |
 | 4b | done | GitHub integration: SkyBlockDataContract + GitHubIndexProvider + GitHubFileFetcher + GitHubConfig |
 | 4c | done | Scheduled AssetPoller (watchdog-only) + AssetDiffEngine + dedicated asset-state JpaSession |
-| 5 | current | Switch SkyBlock repositories to RemoteSkyBlockFactory (DiskOverlaySource + RemoteJsonSource) |
+| 5 | done | Switch SkyBlock repositories to RemoteSkyBlockFactory (DiskOverlaySource + RemoteJsonSource) |
+| 5.5 | done | AssetPoller targeted refresh trigger via `RefreshTrigger` SAM + `JpaSession.refreshModels` library API. Changes propagate on the next 60s poll instead of waiting for restart. |
+| 5.5.1 | blocked | Per-file ETag integration in `GitHubFileFetcher` + `ExternalAssetEntryState.etag` column. Blocked on parallel session landing `If-None-Match` support in `Simplified-Dev/client`. |
 | 6 | future | IQueue write consumer (skyblock.writes) |
 
 ### Entry Point

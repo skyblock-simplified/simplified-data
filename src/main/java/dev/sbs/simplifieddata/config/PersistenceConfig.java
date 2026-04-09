@@ -5,6 +5,7 @@ import dev.sbs.minecraftapi.persistence.SkyBlockFactory;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.poller.LastResponseAccessor;
+import dev.sbs.simplifieddata.poller.RefreshTrigger;
 import dev.simplified.client.Client;
 import dev.simplified.gson.GsonSettings;
 import dev.simplified.persistence.CacheMissingStrategy;
@@ -199,6 +200,23 @@ public class PersistenceConfig {
     @Bean
     public @NotNull LastResponseAccessor skyBlockDataLastResponseAccessor(@NotNull Client<SkyBlockDataContract> skyBlockDataClient) {
         return skyBlockDataClient::getLastResponse;
+    }
+
+    /**
+     * Builds the Phase 5.5 {@link RefreshTrigger} bridge bean as a method reference to
+     * {@link JpaSession#refreshModels(java.util.Collection)} on the SkyBlock session.
+     *
+     * <p>The poller fires this bridge after a successful {@code AssetPoller.applyDiff()}
+     * commit to propagate GitHub-detected changes into the in-memory entity caches.
+     * Wrapping the call in a SAM lets the poller stay decoupled from the {@code final}
+     * {@link JpaSession} type so tests can inject a plain lambda.
+     *
+     * @param skyBlockSession the SkyBlock session (Phase 5 Hazelcast-backed session)
+     * @return a method-reference refresh trigger delegating to the SkyBlock session
+     */
+    @Bean
+    public @NotNull RefreshTrigger skyBlockRefreshTrigger(@NotNull @Qualifier("skyBlockSession") JpaSession skyBlockSession) {
+        return skyBlockSession::refreshModels;
     }
 
     @PostConstruct

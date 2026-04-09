@@ -11,6 +11,7 @@ import dev.simplified.client.exception.NotModifiedException;
 import dev.simplified.client.response.Response;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
+import dev.simplified.persistence.JpaModel;
 import dev.simplified.persistence.JpaSession;
 import dev.simplified.persistence.asset.ExternalAssetEntryState;
 import dev.simplified.persistence.asset.ExternalAssetState;
@@ -30,19 +31,30 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Collectors;
 
 /**
  * Scheduled watchdog that detects changes in the {@code skyblock-data} GitHub repository
  * and maintains the Phase 4a {@link ExternalAssetState} / {@link ExternalAssetEntryState}
- * audit tables.
+ * audit tables, then fires a targeted refresh against the SkyBlock session for the
+ * models whose underlying files actually changed.
  *
- * <p>Phase 4c scope is deliberately watchdog-only: the poller updates state tables and logs
- * detected changes but does NOT mutate any SkyBlock entity repository. Phase 5 wires
- * {@code RemoteJsonSource} into the SkyBlock factory and makes the "change detected" signal
- * actionable via targeted repository refreshes.
+ * <p>Phase 4c introduced the watchdog write path. Phase 5 wired
+ * {@link dev.simplified.persistence.source.RemoteJsonSource} into the SkyBlock factory
+ * so the session's repositories fetch from the remote manifest. Phase 5.5 closes the
+ * loop: after a successful {@code applyDiff()} commit, the poller resolves the set of
+ * affected model classes from the diff's {@code added + changed} entries (each carrying
+ * an FQCN in {@link ManifestIndex.Entry#getModelClass()}), then invokes the
+ * {@link RefreshTrigger} bridge, which delegates to
+ * {@link JpaSession#refreshModels(java.util.Collection)}. Data changes on GitHub now
+ * propagate within one poll cycle ({@code ~60s}) instead of waiting for the next
+ * container restart.
  *
  * <p>Poll cadence is driven by a Spring {@code @Scheduled(fixedDelayString=...)} annotation
  * that reads {@code skyblock.data.github.poll-interval-seconds} (default {@code 60}). The
@@ -89,6 +101,14 @@ public class AssetPoller {
     /** The asset-state session (NOT the SkyBlock session). Scoped to {@code dev.simplified.persistence.asset}. */
     private final @NotNull JpaSession assetSession;
 
+    /**
+     * Bridge to {@link JpaSession#refreshModels(java.util.Collection)} on the SkyBlock
+     * session, fired after a successful {@link #applyDiff} commit to propagate GitHub
+     * changes into the in-memory entity caches. Wrapped in a SAM so tests can supply a
+     * plain lambda without needing a live {@link JpaSession}.
+     */
+    private final @NotNull RefreshTrigger refreshTrigger;
+
     /** The Phase 4b GitHub contract proxy. */
     private final @NotNull SkyBlockDataContract contract;
 
@@ -116,10 +136,12 @@ public class AssetPoller {
     private final @NotNull ReentrantLock pollLock = new ReentrantLock();
 
     /**
-     * Constructs the poller with the injected asset-state session, GitHub contract, last-response
-     * accessor, and configuration properties.
+     * Constructs the poller with the injected asset-state session, SkyBlock refresh trigger,
+     * GitHub contract, last-response accessor, and configuration properties.
      *
      * @param assetSession the dedicated asset-state JPA session (NOT the SkyBlock session)
+     * @param refreshTrigger Phase 5.5 bridge to the SkyBlock session's
+     *                       {@code refreshModels} method, fired after a successful diff apply
      * @param contract the Phase 4b GitHub contract proxy
      * @param lastResponseAccessor bridge to the underlying client's last-response cache
      * @param sourceId the {@link ExternalAssetState#getSourceId()} natural key
@@ -127,12 +149,14 @@ public class AssetPoller {
      */
     public AssetPoller(
         @Qualifier("assetSession") @NotNull JpaSession assetSession,
+        @NotNull RefreshTrigger refreshTrigger,
         @NotNull SkyBlockDataContract contract,
         @NotNull LastResponseAccessor lastResponseAccessor,
         @Value("${skyblock.data.github.source-id:skyblock-data}") @NotNull String sourceId,
         @Value("${skyblock.data.github.poll-enabled:true}") boolean pollEnabled
     ) {
         this.assetSession = assetSession;
+        this.refreshTrigger = refreshTrigger;
         this.contract = contract;
         this.lastResponseAccessor = lastResponseAccessor;
         this.gson = MinecraftApi.getGson();
@@ -385,7 +409,9 @@ public class AssetPoller {
     }
 
     /**
-     * Applies the computed diff to the asset-state tables inside a single transaction.
+     * Applies the computed diff to the asset-state tables inside a single transaction,
+     * then fires a Phase 5.5 targeted refresh against the SkyBlock session for the models
+     * whose underlying files changed.
      *
      * <p>Order of operations inside the transaction:
      * <ol>
@@ -394,6 +420,22 @@ public class AssetPoller {
      *   <li>Persist every new entry in {@link AssetDiff#getAdded()}.</li>
      *   <li>Update every changed entry in {@link AssetDiff#getChanged()} to the new {@code content_sha256}.</li>
      * </ol>
+     *
+     * <p>After the transaction commits, {@link #resolveRefreshTargets(AssetDiff)} reads
+     * {@code added + changed} entries and extracts their {@code model_class} FQCNs into a
+     * {@code Set<Class<? extends JpaModel>>}. The set is passed to {@link #refreshTrigger}
+     * <b>outside</b> the transaction so the downstream GitHub fetches (initiated inside
+     * {@link dev.simplified.persistence.source.RemoteJsonSource#load}) do not hold the
+     * asset-state connection open across network I/O. A refresh failure is isolated to its
+     * own {@code try/catch} so a single bad model does not crash the poll cycle - the next
+     * scheduled fire retries.
+     *
+     * <p>The {@code removed} diff category is deliberately ignored by the refresh trigger:
+     * {@link ExternalAssetEntryState} rows carry only {@code entryPath}, not
+     * {@code modelClass}, so the mapping from a just-deleted path back to a model class is
+     * not recoverable without additional state. A non-empty {@code removed} list emits a
+     * {@code WARN} pointing operators at the next container restart as the resolution path;
+     * this case is rare in practice (removing an entire entity family is a breaking change).
      *
      * @param probe the fresh ETag + commit sha from the Commits API
      * @param snapshot the fetched manifest with its content SHA-256
@@ -457,6 +499,100 @@ public class AssetPoller {
             "AssetPoller source='{}' - state written: commitSha='{}' contentSha256='{}' lastSuccessAt={}",
             this.sourceId, probe.commitSha(), snapshot.contentSha256(), now
         );
+
+        this.triggerRefresh(diff);
+    }
+
+    /**
+     * Resolves the Phase 5.5 refresh targets from the diff and fires
+     * {@link #refreshTrigger}, isolating any failure so it cannot propagate into the
+     * surrounding poll cycle.
+     *
+     * @param diff the per-entry delta from {@link AssetDiffEngine}
+     */
+    private void triggerRefresh(@NotNull AssetDiff diff) {
+        if (!diff.getRemoved().isEmpty()) {
+            log.warn(
+                "AssetPoller source='{}' - {} entries removed from manifest; targeted refresh cannot map path back to model class, deferred to next container restart",
+                this.sourceId, diff.getRemoved().size()
+            );
+        }
+
+        Set<Class<? extends JpaModel>> targets = this.resolveRefreshTargets(diff);
+
+        if (targets.isEmpty()) {
+            log.debug("AssetPoller source='{}' - no refresh targets resolved from diff", this.sourceId);
+            return;
+        }
+
+        String targetNames = targets.stream()
+            .map(Class::getSimpleName)
+            .sorted()
+            .collect(Collectors.joining(", "));
+
+        try {
+            this.refreshTrigger.refresh(targets);
+            log.info(
+                "AssetPoller source='{}' - triggered refresh for {} models: [{}]",
+                this.sourceId, targets.size(), targetNames
+            );
+        } catch (RuntimeException ex) {
+            log.error(
+                "AssetPoller source='{}' - refresh trigger failed for models [{}]: {}",
+                this.sourceId, targetNames, ex.getMessage(), ex
+            );
+        }
+    }
+
+    /**
+     * Reads {@link AssetDiff#getAdded()} and {@link AssetDiff#getChanged()} and returns the
+     * set of {@link JpaModel} classes they reference via {@link ManifestIndex.Entry#getModelClass()}.
+     *
+     * <p>A {@link ClassNotFoundException} on any entry is logged at {@code WARN} and that
+     * entry is skipped. This is the graceful-degradation path for a manifest that
+     * references a class which has been renamed or moved since the running container's
+     * last deploy - the stable container keeps running with its current schema, and the
+     * targeted refresh simply omits the unresolvable entries.
+     *
+     * <p>Duplicate FQCNs (multiple manifest entries sharing the same model class, or an
+     * entry present in both added and changed) collapse into a single set element.
+     *
+     * @param diff the per-entry delta from {@link AssetDiffEngine}
+     * @return the resolved set of model classes, possibly empty
+     */
+    private @NotNull Set<Class<? extends JpaModel>> resolveRefreshTargets(@NotNull AssetDiff diff) {
+        Set<String> fqcns = new LinkedHashSet<>();
+
+        for (ManifestIndex.Entry entry : diff.getAdded())
+            fqcns.add(entry.getModelClass());
+
+        for (AssetDiff.ChangedEntry changed : diff.getChanged())
+            fqcns.add(changed.getCurrent().getModelClass());
+
+        Set<Class<? extends JpaModel>> targets = new HashSet<>();
+
+        for (String fqcn : fqcns) {
+            try {
+                Class<?> loaded = Class.forName(fqcn);
+
+                if (!JpaModel.class.isAssignableFrom(loaded)) {
+                    log.warn(
+                        "AssetPoller source='{}' - manifest model_class '{}' is not a JpaModel, skipping",
+                        this.sourceId, fqcn
+                    );
+                    continue;
+                }
+
+                targets.add(loaded.asSubclass(JpaModel.class));
+            } catch (ClassNotFoundException ex) {
+                log.warn(
+                    "AssetPoller source='{}' - manifest references unknown model_class '{}', skipping refresh for this entry",
+                    this.sourceId, fqcn
+                );
+            }
+        }
+
+        return targets;
     }
 
     /**
