@@ -180,6 +180,7 @@ public class RemoteSkyBlockFactory implements RepositoryFactory {
         return new WritableRemoteJsonSource<>(
             overlay,
             writeContract,
+            fileFetcher,
             indexProvider,
             gson,
             sourceId,

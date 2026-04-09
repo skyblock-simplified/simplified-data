@@ -8,6 +8,7 @@ import dev.sbs.simplifieddata.client.request.PutContentRequest;
 import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
 import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.write.BufferedMutation;
+import dev.sbs.simplifieddata.write.StagedBatch;
 import dev.simplified.client.exception.PreconditionFailedException;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
@@ -15,6 +16,7 @@ import dev.simplified.collection.ConcurrentMap;
 import dev.simplified.persistence.JpaModel;
 import dev.simplified.persistence.JpaRepository;
 import dev.simplified.persistence.exception.JpaException;
+import dev.simplified.persistence.source.FileFetcher;
 import dev.simplified.persistence.source.IndexProvider;
 import dev.simplified.persistence.source.ManifestIndex;
 import dev.simplified.persistence.source.MutableSource;
@@ -108,6 +110,15 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
     private final @NotNull SkyBlockDataWriteContract writeContract;
 
     /**
+     * The Phase 4b file fetcher used by the Phase 6b.1 Git Data API staging
+     * path to read current file content directly (bypassing the base64
+     * envelope limit that caps {@link SkyBlockDataWriteContract#getFileMetadata(String)}
+     * at 1 MB). Uses the raw media type and handles files up to the 100 MB
+     * Contents API ceiling.
+     */
+    private final @NotNull FileFetcher fileFetcher;
+
+    /**
      * The manifest index provider used to resolve the target file path at
      * commit time. Shared with the read-path {@code RemoteJsonSource} so the
      * framework's auto-304 revalidation cache means lookups after the first
@@ -147,6 +158,8 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
      * @param delegate the read-path source chain (typically
      *                 {@code DiskOverlaySource(RemoteJsonSource(...))})
      * @param writeContract the GitHub Contents API write-path contract
+     * @param fileFetcher the Phase 4b file fetcher for direct Git Data API
+     *                    staging reads (bypasses the base64 envelope limit)
      * @param indexProvider the manifest index provider
      * @param gson the Gson instance for list serialization
      * @param sourceId the human-readable source id
@@ -155,12 +168,13 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
     public WritableRemoteJsonSource(
         @NotNull Source<T> delegate,
         @NotNull SkyBlockDataWriteContract writeContract,
+        @NotNull FileFetcher fileFetcher,
         @NotNull IndexProvider indexProvider,
         @NotNull Gson gson,
         @NotNull String sourceId,
         @NotNull Class<T> modelClass
     ) {
-        this(delegate, writeContract, indexProvider, gson, sourceId, modelClass, DEFAULT_MAX_412_IMMEDIATE_RETRIES);
+        this(delegate, writeContract, fileFetcher, indexProvider, gson, sourceId, modelClass, DEFAULT_MAX_412_IMMEDIATE_RETRIES);
     }
 
     /**
@@ -170,6 +184,8 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
      *
      * @param delegate the read-path source chain
      * @param writeContract the GitHub Contents API write-path contract
+     * @param fileFetcher the Phase 4b file fetcher for direct Git Data API
+     *                    staging reads (bypasses the base64 envelope limit)
      * @param indexProvider the manifest index provider
      * @param gson the Gson instance for list serialization
      * @param sourceId the human-readable source id
@@ -179,6 +195,7 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
     public WritableRemoteJsonSource(
         @NotNull Source<T> delegate,
         @NotNull SkyBlockDataWriteContract writeContract,
+        @NotNull FileFetcher fileFetcher,
         @NotNull IndexProvider indexProvider,
         @NotNull Gson gson,
         @NotNull String sourceId,
@@ -187,6 +204,7 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
     ) {
         this.delegate = delegate;
         this.writeContract = writeContract;
+        this.fileFetcher = fileFetcher;
         this.indexProvider = indexProvider;
         this.gson = gson;
         this.sourceId = sourceId;
@@ -314,6 +332,253 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
     }
 
     /**
+     * Phase 6b.1 Git Data API staging entry point. Drains the buffer and
+     * computes a {@link StagedBatch} describing the per-file mutation result
+     * without issuing any network writes.
+     *
+     * <p>Unlike {@link #commitBatch()}, this method splits the work into two
+     * phases so the {@link dev.sbs.simplifieddata.write.WriteBatchScheduler}
+     * can aggregate staging results across every source in the current tick
+     * and then commit the union as one atomic Git Data API flow. Each
+     * {@code StagedBatch} describes the final state of every dirty file
+     * belonging to this source's entity type, routed correctly across the
+     * primary file and the optional {@code _extra} companion file.
+     *
+     * <p>Dual-file routing rules (Phase 6b.1 Q3b resolution):
+     * <ul>
+     *   <li>Read both the primary file and, if {@code hasExtra=true}, the
+     *       companion file.</li>
+     *   <li>Build an id ownership lookup by walking the primary list first
+     *       and the extras list second - entries in the extras file overwrite
+     *       any conflicting entries in the primary, matching the
+     *       {@code RemoteJsonSource.load} merge semantics.</li>
+     *   <li>For each buffered {@link BufferedMutation}:
+     *     <ul>
+     *       <li><b>UPSERT</b>: replace in place in the owning file; if the id
+     *           is new, append to the primary file.</li>
+     *       <li><b>DELETE</b>: remove from the owning file; a delete of an
+     *           id that lives in neither file is a no-op.</li>
+     *     </ul>
+     *   </li>
+     *   <li>After all mutations are applied, compute the new serialized body
+     *       for each file via Gson. If a file's serialized body would be
+     *       byte-identical to the current on-disk body, omit it from the
+     *       {@link StagedBatch#getFileSnapshots() snapshot map}. Only files
+     *       that actually changed survive into the staging result.</li>
+     * </ul>
+     *
+     * <p>This routing preserves the team's manual override layer: entities
+     * currently in {@code items_extra.json} stay there on mutation, and
+     * entities currently in the primary stay there. A brand-new id added via
+     * the IQueue write path lands in the primary by default; a contributor
+     * who wants that entity in the extras file must move it manually after
+     * the first commit, which is a rare and acceptable edge case because
+     * third-party API data normally flows into the primary and manual
+     * corrections start life in the extras.
+     *
+     * @return the staging result; {@link StagedBatch#empty()} when the
+     *         buffer was empty OR when every mutation happened to be a
+     *         byte-identical no-op against the current on-disk state
+     */
+    public @NotNull StagedBatch<T> stageBatch() {
+        ConcurrentMap<String, BufferedMutation<T>> snapshot = this.drainBuffer();
+
+        if (snapshot.isEmpty())
+            return StagedBatch.empty();
+
+        try {
+            return this.stageSnapshot(snapshot);
+        } catch (Throwable ex) {
+            log.error(
+                "stageBatch failed for source '{}' type '{}' with {} mutations - escalating all to retry path",
+                this.sourceId, this.modelClass.getSimpleName(), snapshot.size(), ex
+            );
+            // Re-buffer the snapshot so the caller can dead-letter via the
+            // usual CommitBatchResult.failed(...) path. Preserves the
+            // original producer request ids via the BufferedMutation fields.
+            ConcurrentList<BufferedMutation<T>> failed = Concurrent.newList();
+            failed.addAll(snapshot.values());
+            return new StagedBatch<>(this.modelClass, Concurrent.newUnmodifiableMap(), failed, 0);
+        }
+    }
+
+    /**
+     * Computes the {@link StagedBatch} for a drained buffer snapshot.
+     * Resolves the manifest entry for this source's model class, reads the
+     * current primary (and extras, if {@code hasExtra}) file content via
+     * {@link FileFetcher}, applies dispatch-by-ownership routing, and
+     * produces the dirty-file snapshot map.
+     */
+    private @NotNull StagedBatch<T> stageSnapshot(
+        @NotNull ConcurrentMap<String, BufferedMutation<T>> snapshot
+    ) throws JpaException {
+        ManifestIndex manifest = this.indexProvider.loadIndex();
+        ManifestIndex.Entry entry = this.resolveManifestEntry(manifest);
+
+        String primaryPath = entry.getPath();
+        ConcurrentList<T> currentPrimary = this.fetchAndDecode(primaryPath);
+
+        String extraPath = entry.isHasExtra() ? entry.getExtraPath() : null;
+        ConcurrentList<T> currentExtra = extraPath != null ? this.fetchAndDecode(extraPath) : null;
+
+        // Compute mutable result lists + id ownership map.
+        ConcurrentList<T> mutatedPrimary = Concurrent.newList();
+        mutatedPrimary.addAll(currentPrimary);
+
+        ConcurrentList<T> mutatedExtra = null;
+
+        if (currentExtra != null) {
+            mutatedExtra = Concurrent.newList();
+            mutatedExtra.addAll(currentExtra);
+        }
+
+        // Build the id -> file ownership lookup. Extras wins on conflict
+        // so subsequent dispatch sees the authoritative file for each id.
+        java.util.Map<String, FileOwner> ownership = new java.util.HashMap<>();
+
+        for (T e : mutatedPrimary) {
+            String id = this.requireIdString(e);
+            ownership.put(id, FileOwner.PRIMARY);
+        }
+
+        if (mutatedExtra != null) {
+            for (T e : mutatedExtra) {
+                String id = this.requireIdString(e);
+                ownership.put(id, FileOwner.EXTRA);
+            }
+        }
+
+        // Dispatch every buffered mutation to its owning file.
+        for (java.util.Map.Entry<String, BufferedMutation<T>> bufferedEntry : snapshot.entrySet()) {
+            String id = bufferedEntry.getKey();
+            BufferedMutation<T> mutation = bufferedEntry.getValue();
+            FileOwner owner = ownership.get(id);
+
+            switch (mutation.getOperation()) {
+                case UPSERT -> {
+                    if (owner == FileOwner.EXTRA) {
+                        replaceInPlace(mutatedExtra, id, mutation.getEntity());
+                    } else if (owner == FileOwner.PRIMARY) {
+                        replaceInPlace(mutatedPrimary, id, mutation.getEntity());
+                    } else {
+                        // New id - default to primary.
+                        mutatedPrimary.add(mutation.getEntity());
+                        ownership.put(id, FileOwner.PRIMARY);
+                    }
+                }
+                case DELETE -> {
+                    if (owner == FileOwner.EXTRA) {
+                        removeById(mutatedExtra, id);
+                        ownership.remove(id);
+                    } else if (owner == FileOwner.PRIMARY) {
+                        removeById(mutatedPrimary, id);
+                        ownership.remove(id);
+                    }
+                    // Delete of a non-existent id is a silent no-op.
+                }
+            }
+        }
+
+        // Build the dirty-file snapshot map. Only include files whose new
+        // serialized body would differ from the current on-disk body.
+        ConcurrentMap<String, ConcurrentList<T>> fileSnapshots = Concurrent.newMap();
+        this.addIfDirty(fileSnapshots, primaryPath, currentPrimary, mutatedPrimary);
+
+        if (mutatedExtra != null)
+            this.addIfDirty(fileSnapshots, extraPath, currentExtra, mutatedExtra);
+
+        ConcurrentList<BufferedMutation<T>> mutationList = Concurrent.newList();
+        mutationList.addAll(snapshot.values());
+
+        if (fileSnapshots.isEmpty()) {
+            log.debug(
+                "stageBatch for source '{}' type '{}' drained {} mutations but produced no dirty files",
+                this.sourceId, this.modelClass.getSimpleName(), snapshot.size()
+            );
+            return StagedBatch.empty();
+        }
+
+        log.debug(
+            "staged {} mutations for source '{}' type '{}' across {} file(s)",
+            snapshot.size(), this.sourceId, this.modelClass.getSimpleName(), fileSnapshots.size()
+        );
+        return new StagedBatch<>(
+            this.modelClass,
+            fileSnapshots.toUnmodifiableMap(),
+            mutationList.toUnmodifiableList(),
+            snapshot.size()
+        );
+    }
+
+    /**
+     * Adds the given file to the dirty-file map only if its new serialized
+     * body differs from the current on-disk body. This suppresses no-op
+     * commits where every buffered mutation happened to be byte-identical
+     * to the existing state.
+     */
+    private void addIfDirty(
+        @NotNull ConcurrentMap<String, ConcurrentList<T>> fileSnapshots,
+        @NotNull String path,
+        @NotNull ConcurrentList<T> currentList,
+        @NotNull ConcurrentList<T> mutatedList
+    ) {
+        String currentJson = this.gson.toJson(currentList, this.listType());
+        String mutatedJson = this.gson.toJson(mutatedList, this.listType());
+
+        if (!currentJson.equals(mutatedJson))
+            fileSnapshots.put(path, mutatedList);
+    }
+
+    /** Replaces the entity with the matching id in place, preserving list order. */
+    private void replaceInPlace(@NotNull ConcurrentList<T> list, @NotNull String id, @NotNull T replacement) throws JpaException {
+        for (int i = 0; i < list.size(); i++) {
+            if (id.equals(this.requireIdString(list.get(i)))) {
+                list.set(i, replacement);
+                return;
+            }
+        }
+    }
+
+    /** Removes the entity with the matching id. */
+    private void removeById(@NotNull ConcurrentList<T> list, @NotNull String id) throws JpaException {
+        for (int i = 0; i < list.size(); i++) {
+            if (id.equals(this.requireIdString(list.get(i)))) {
+                list.remove(i);
+                return;
+            }
+        }
+    }
+
+    /**
+     * Fetches the raw file body via {@link FileFetcher} and decodes it into a
+     * typed {@code ConcurrentList<T>} via Gson. Empty files (e.g. a brand-new
+     * extras file) produce an empty list.
+     */
+    private @NotNull ConcurrentList<T> fetchAndDecode(@NotNull String path) throws JpaException {
+        String body = this.fileFetcher.fetchFile(path);
+        ConcurrentList<T> loaded = this.gson.fromJson(body, this.listType());
+        return loaded != null ? loaded : Concurrent.newList();
+    }
+
+    /** Resolves the manifest entry whose {@code modelClass} matches this source's entity type. */
+    private @NotNull ManifestIndex.Entry resolveManifestEntry(@NotNull ManifestIndex manifest) throws JpaException {
+        return manifest.getFiles()
+            .stream()
+            .filter(e -> e.getModelClass().equals(this.modelClass.getName()))
+            .findFirst()
+            .orElseThrow(() -> new JpaException(
+                "No manifest entry for '%s' under source '%s' - cannot stage write path",
+                this.modelClass.getName(), this.sourceId
+            ));
+    }
+
+    /** File ownership marker used by the dual-file routing logic inside {@link #stageSnapshot}. */
+    private enum FileOwner {
+        PRIMARY,
+        EXTRA
+    }
+
+    /**
      * Internal commit loop: resolve path, fetch envelope, decode body, apply
      * mutations, PUT, retry on 412.
      */
@@ -392,19 +657,14 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
 
     /**
      * Resolves the target file path for this source's entity class by looking
-     * up the matching manifest entry and returning its {@code path} field.
+     * up the matching manifest entry and returning its primary {@code path}
+     * field. Used by the Contents API fallback path in {@link #commitSnapshot};
+     * the Git Data staging path uses {@link #resolveManifestEntry} directly so
+     * it can also read the {@code extraPath} field.
      */
     private @NotNull String resolveTargetPath() throws JpaException {
         ManifestIndex manifest = this.indexProvider.loadIndex();
-        ManifestIndex.Entry entry = manifest.getFiles()
-            .stream()
-            .filter(e -> e.getModelClass().equals(this.modelClass.getName()))
-            .findFirst()
-            .orElseThrow(() -> new JpaException(
-                "No manifest entry for '%s' under source '%s' - cannot resolve write path",
-                this.modelClass.getName(), this.sourceId
-            ));
-        return entry.getPath();
+        return this.resolveManifestEntry(manifest).getPath();
     }
 
     /**

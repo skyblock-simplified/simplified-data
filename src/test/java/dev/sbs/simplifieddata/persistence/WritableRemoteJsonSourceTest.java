@@ -13,6 +13,7 @@ import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.JpaRepository;
 import dev.simplified.persistence.exception.JpaException;
+import dev.simplified.persistence.source.FileFetcher;
 import dev.simplified.persistence.source.IndexProvider;
 import dev.simplified.persistence.source.ManifestIndex;
 import dev.simplified.persistence.source.Source;
@@ -78,12 +79,14 @@ class WritableRemoteJsonSourceTest {
     private RecordingDelegate delegate;
     private StubIndexProvider indexProvider;
     private StubWriteContract contract;
+    private StubFileFetcher fileFetcher;
 
     @BeforeEach
     void setUp() {
         this.delegate = new RecordingDelegate();
         this.indexProvider = new StubIndexProvider();
         this.contract = new StubWriteContract();
+        this.fileFetcher = new StubFileFetcher();
     }
 
     @Test
@@ -254,6 +257,144 @@ class WritableRemoteJsonSourceTest {
         assertThrows(JpaException.class, () -> source.upsert(bad));
     }
 
+    // --- Phase 6b.1 stageBatch() tests --- //
+
+    @Test
+    @DisplayName("stageBatch on an empty buffer returns StagedBatch.empty()")
+    void stageBatchEmpty() {
+        WritableRemoteJsonSource<ZodiacEvent> source = newStagingSource();
+
+        dev.sbs.simplifieddata.write.StagedBatch<ZodiacEvent> staged = source.stageBatch();
+
+        assertThat(staged.isEmpty(), is(true));
+        assertThat(staged.getFileSnapshots().size(), equalTo(0));
+    }
+
+    @Test
+    @DisplayName("stageBatch on a single-file source produces one file snapshot with appended upsert")
+    void stageBatchSingleFileAppend() throws Exception {
+        ZodiacEvent existing = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
+        this.fileFetcher.put(FILE_PATH, GSON.toJson(List.of(existing)));
+
+        WritableRemoteJsonSource<ZodiacEvent> source = newStagingSource();
+        source.upsert(event("YEAR_OF_THE_DOLPHIN", "Year of the Dolphin", 415));
+
+        dev.sbs.simplifieddata.write.StagedBatch<ZodiacEvent> staged = source.stageBatch();
+
+        assertThat(staged.isEmpty(), is(false));
+        assertThat(staged.getFileSnapshots().size(), equalTo(1));
+        assertThat(staged.getMutationCount(), equalTo(1));
+
+        ConcurrentList<ZodiacEvent> mutatedPrimary = staged.getFileSnapshots().get(FILE_PATH);
+        assertThat(mutatedPrimary, hasSize(2));
+        assertThat(mutatedPrimary.get(0).getId(), equalTo("YEAR_OF_THE_SEAL"));
+        assertThat(mutatedPrimary.get(1).getId(), equalTo("YEAR_OF_THE_DOLPHIN"));
+    }
+
+    @Test
+    @DisplayName("stageBatch routes an upsert to the extras file when the id currently lives there")
+    void stageBatchRoutesUpsertToExtras() throws Exception {
+        this.indexProvider.hasExtra = true;
+
+        ZodiacEvent inPrimary = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
+        ZodiacEvent inExtras = event("YEAR_OF_THE_WHALE", "Year of the Whale (corrected)", 413);
+        this.fileFetcher.put(FILE_PATH, GSON.toJson(List.of(inPrimary)));
+        this.fileFetcher.put(this.indexProvider.extraPath, GSON.toJson(List.of(inExtras)));
+
+        WritableRemoteJsonSource<ZodiacEvent> source = newStagingSource();
+        // Upsert the whale with a new year - it should stay in the extras file.
+        source.upsert(event("YEAR_OF_THE_WHALE", "Year of the Whale (corrected)", 499));
+
+        dev.sbs.simplifieddata.write.StagedBatch<ZodiacEvent> staged = source.stageBatch();
+
+        assertThat(staged.getFileSnapshots().size(), equalTo(1));
+        assertThat(staged.getFileSnapshots().containsKey(this.indexProvider.extraPath), is(true));
+        assertThat(staged.getFileSnapshots().containsKey(FILE_PATH), is(false));
+
+        ConcurrentList<ZodiacEvent> mutatedExtra = staged.getFileSnapshots().get(this.indexProvider.extraPath);
+        assertThat(mutatedExtra, hasSize(1));
+        assertThat(mutatedExtra.get(0).getReleaseYear(), equalTo(499));
+    }
+
+    @Test
+    @DisplayName("stageBatch routes a new-id upsert to the primary file when extras exists but lacks the id")
+    void stageBatchRoutesNewIdToPrimary() throws Exception {
+        this.indexProvider.hasExtra = true;
+
+        ZodiacEvent inPrimary = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
+        ZodiacEvent inExtras = event("YEAR_OF_THE_WHALE", "Year of the Whale", 413);
+        this.fileFetcher.put(FILE_PATH, GSON.toJson(List.of(inPrimary)));
+        this.fileFetcher.put(this.indexProvider.extraPath, GSON.toJson(List.of(inExtras)));
+
+        WritableRemoteJsonSource<ZodiacEvent> source = newStagingSource();
+        // Brand-new id - should land in the primary file by default.
+        source.upsert(event("YEAR_OF_THE_DOLPHIN", "Year of the Dolphin", 415));
+
+        dev.sbs.simplifieddata.write.StagedBatch<ZodiacEvent> staged = source.stageBatch();
+
+        assertThat(staged.getFileSnapshots().size(), equalTo(1));
+        assertThat(staged.getFileSnapshots().containsKey(FILE_PATH), is(true));
+        assertThat(staged.getFileSnapshots().containsKey(this.indexProvider.extraPath), is(false));
+
+        ConcurrentList<ZodiacEvent> mutatedPrimary = staged.getFileSnapshots().get(FILE_PATH);
+        assertThat(mutatedPrimary, hasSize(2));
+        assertThat(mutatedPrimary.get(1).getId(), equalTo("YEAR_OF_THE_DOLPHIN"));
+    }
+
+    @Test
+    @DisplayName("stageBatch routes a delete to whichever file currently owns the id")
+    void stageBatchRoutesDeleteToOwningFile() throws Exception {
+        this.indexProvider.hasExtra = true;
+
+        ZodiacEvent inPrimary = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
+        ZodiacEvent inExtras = event("YEAR_OF_THE_WHALE", "Year of the Whale", 413);
+        this.fileFetcher.put(FILE_PATH, GSON.toJson(List.of(inPrimary)));
+        this.fileFetcher.put(this.indexProvider.extraPath, GSON.toJson(List.of(inExtras)));
+
+        WritableRemoteJsonSource<ZodiacEvent> source = newStagingSource();
+        source.delete(event("YEAR_OF_THE_WHALE", "Year of the Whale", 413));
+
+        dev.sbs.simplifieddata.write.StagedBatch<ZodiacEvent> staged = source.stageBatch();
+
+        assertThat(staged.getFileSnapshots().size(), equalTo(1));
+        assertThat(staged.getFileSnapshots().containsKey(this.indexProvider.extraPath), is(true));
+
+        ConcurrentList<ZodiacEvent> mutatedExtra = staged.getFileSnapshots().get(this.indexProvider.extraPath);
+        assertThat(mutatedExtra, hasSize(0));
+    }
+
+    @Test
+    @DisplayName("stageBatch produces no dirty files when every upsert is byte-identical to current state")
+    void stageBatchSuppressesNoOp() throws Exception {
+        ZodiacEvent existing = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
+        this.fileFetcher.put(FILE_PATH, GSON.toJson(List.of(existing)));
+
+        WritableRemoteJsonSource<ZodiacEvent> source = newStagingSource();
+        // Upsert the identical entity - post-mutation serialization should match.
+        source.upsert(event("YEAR_OF_THE_SEAL", "Year of the Seal", 414));
+
+        dev.sbs.simplifieddata.write.StagedBatch<ZodiacEvent> staged = source.stageBatch();
+
+        assertThat(staged.isEmpty(), is(true));
+    }
+
+    /**
+     * Creates a source configured for the stageBatch tests - no write contract
+     * calls, fileFetcher pre-populated with per-test file content.
+     */
+    private @NotNull WritableRemoteJsonSource<ZodiacEvent> newStagingSource() {
+        return new WritableRemoteJsonSource<>(
+            this.delegate,
+            this.contract,
+            this.fileFetcher,
+            this.indexProvider,
+            GSON,
+            SOURCE_ID,
+            ZodiacEvent.class,
+            3
+        );
+    }
+
     // --- helper plumbing below --- //
 
     private @NotNull WritableRemoteJsonSource<ZodiacEvent> newSource(byte[] initialBody) {
@@ -263,6 +404,7 @@ class WritableRemoteJsonSourceTest {
         return new WritableRemoteJsonSource<>(
             this.delegate,
             this.contract,
+            this.fileFetcher,
             this.indexProvider,
             GSON,
             SOURCE_ID,
@@ -279,6 +421,7 @@ class WritableRemoteJsonSourceTest {
         return new WritableRemoteJsonSource<>(
             this.delegate,
             this.contract,
+            this.fileFetcher,
             this.indexProvider,
             GSON,
             SOURCE_ID,
@@ -339,30 +482,56 @@ class WritableRemoteJsonSourceTest {
 
     }
 
+    /**
+     * In-memory {@link FileFetcher} stub - call sites pre-register file contents
+     * by path, and {@code fetchFile} returns the registered content or throws if
+     * no registration exists for the requested path.
+     */
+    private static final class StubFileFetcher implements FileFetcher {
+
+        private final java.util.Map<String, String> files = new java.util.HashMap<>();
+
+        void put(@NotNull String path, @NotNull String content) {
+            this.files.put(path, content);
+        }
+
+        @Override
+        public @NotNull String fetchFile(@NotNull String path) {
+            String content = this.files.get(path);
+
+            if (content == null)
+                throw new IllegalStateException("StubFileFetcher has no registration for path '" + path + "'");
+
+            return content;
+        }
+
+    }
+
     private static final class StubIndexProvider implements IndexProvider {
+
+        boolean hasExtra = false;
+        @NotNull String extraPath = "data/v1/world/zodiac_events_extra.json";
 
         @Override
         public @NotNull ManifestIndex loadIndex() {
             // Hand-roll the manifest via Gson to avoid relying on private constructors.
-            String json = """
-                {
-                  "version": 1,
-                  "generated_at": "2026-04-09T12:00:00Z",
-                  "commit_sha": null,
-                  "count": 1,
-                  "files": [
-                    {
-                      "path": "%s",
-                      "category": "world",
-                      "table_name": "zodiac_events",
-                      "model_class": "%s",
-                      "content_sha256": "deadbeef",
-                      "bytes": 1024,
-                      "has_extra": false
-                    }
-                  ]
-                }
-                """.formatted(FILE_PATH, ZodiacEvent.class.getName());
+            String extraBlock = this.hasExtra
+                ? ",\"has_extra\":true,\"extra_path\":\"" + this.extraPath + "\",\"extra_sha256\":\"deadbeef\",\"extra_bytes\":256"
+                : ",\"has_extra\":false";
+            String json = "{"
+                + "\"version\":1,"
+                + "\"generated_at\":\"2026-04-09T12:00:00Z\","
+                + "\"commit_sha\":null,"
+                + "\"count\":1,"
+                + "\"files\":[{"
+                + "\"path\":\"" + FILE_PATH + "\","
+                + "\"category\":\"world\","
+                + "\"table_name\":\"zodiac_events\","
+                + "\"model_class\":\"" + ZodiacEvent.class.getName() + "\","
+                + "\"content_sha256\":\"deadbeef\","
+                + "\"bytes\":1024"
+                + extraBlock
+                + "}]}";
             return GSON.fromJson(json, ManifestIndex.class);
         }
 

@@ -287,6 +287,7 @@ class WriteQueueConsumerTest {
             super(
                 new NoopDelegate<>(),
                 new ThrowingContract(),
+                new ThrowingFileFetcher(),
                 new EmptyIndexProvider(),
                 MinecraftApi.getGson(),
                 "recording-" + modelClass.getSimpleName(),
@@ -308,6 +309,15 @@ class WriteQueueConsumerTest {
         @Override
         public @NotNull ConcurrentList<T> load(@NotNull JpaRepository<T> repository) {
             return Concurrent.newList();
+        }
+
+    }
+
+    private static final class ThrowingFileFetcher implements dev.simplified.persistence.source.FileFetcher {
+
+        @Override
+        public @NotNull String fetchFile(@NotNull String path) {
+            throw new UnsupportedOperationException("FileFetcher stub should not be invoked");
         }
 
     }
