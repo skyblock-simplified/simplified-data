@@ -107,6 +107,7 @@ public class WriteQueueConsumer {
 
     private final @NotNull HazelcastInstance writeHazelcastInstance;
     private final @NotNull RemoteSkyBlockFactory factory;
+    private final @NotNull WriteMetrics metrics;
     private final @NotNull Gson gson;
     private final int maxRetryAttempts;
     private final boolean enabled;
@@ -117,12 +118,14 @@ public class WriteQueueConsumer {
     public WriteQueueConsumer(
         @NotNull HazelcastInstance skyBlockWriteHazelcastInstance,
         @NotNull RemoteSkyBlockFactory remoteSkyBlockFactory,
+        @NotNull WriteMetrics writeMetrics,
         @Value("${skyblock.data.github.write-retry-initial-delay-minutes:1}") long retryInitialDelayMinutes,
         @Value("${skyblock.data.github.write-retry-max-attempts:5}") int maxRetryAttempts,
         @Value("${skyblock.data.github.write-consumer-enabled:true}") boolean enabled
     ) {
         this.writeHazelcastInstance = skyBlockWriteHazelcastInstance;
         this.factory = remoteSkyBlockFactory;
+        this.metrics = writeMetrics;
         this.gson = MinecraftApi.getGson();
         // retryInitialDelayMinutes is retained as a constructor parameter for
         // backwards-compatible property binding; the actual backoff math lives in
@@ -153,6 +156,14 @@ public class WriteQueueConsumer {
 
         if (leftover > 0)
             log.info("WriteQueueConsumer resuming with {} leftover retry entries from prior process lifetime", leftover);
+
+        // Phase 6b.3: register the 3 Hazelcast-backed gauges now that the
+        // cluster handshake has completed. The existing drainThread != null
+        // guard above ensures start() is idempotent per context refresh, so
+        // these registrations only fire once.
+        this.metrics.registerRetryImapSizeGauge(this.writeHazelcastInstance);
+        this.metrics.registerDeadletterImapSizeGauge(this.writeHazelcastInstance);
+        this.metrics.registerPrimaryQueueSizeGauge(this.writeHazelcastInstance);
 
         Thread thread = new Thread(this::drainLoop, "skyblock-write-consumer");
         thread.setDaemon(true);
@@ -226,6 +237,8 @@ public class WriteQueueConsumer {
                 // 1. Prefer fresh writes from the primary queue - short poll so retry scans don't starve.
                 WriteRequest fresh = queue.poll(500, TimeUnit.MILLISECONDS);
                 if (fresh != null) {
+                    this.metrics.recordFreshDispatch();
+                    this.metrics.recordDispatchLatency(fresh.getTimestamp());
                     this.dispatch(fresh, 0);
                     continue;
                 }
@@ -277,6 +290,7 @@ public class WriteQueueConsumer {
             if (taken == null)
                 continue;
 
+            this.metrics.recordRetryDispatch(taken.getAttempt());
             this.dispatch(taken.getRequest(), taken.getAttempt());
         }
     }
@@ -303,6 +317,7 @@ public class WriteQueueConsumer {
             WritableRemoteJsonSource source = this.factory.getWritableSources().get(type);
 
             if (source == null) {
+                this.metrics.recordSkipped(WriteMetrics.SkipReason.MISSING_SOURCE);
                 log.warn(
                     "No writable source registered for type '{}' - skipping WriteRequest {}",
                     type.getName(), request.getRequestId()
@@ -328,6 +343,13 @@ public class WriteQueueConsumer {
                 );
             }
         } catch (JpaException ex) {
+            // JpaException wraps either ClassNotFoundException (unknown type) or
+            // Gson JsonSyntaxException (malformed JSON) inside the resolve/deserialize
+            // helpers. The cause type discriminates which skip-reason tag to emit.
+            WriteMetrics.SkipReason reason = ex.getCause() instanceof ClassNotFoundException
+                ? WriteMetrics.SkipReason.UNKNOWN_TYPE
+                : WriteMetrics.SkipReason.MALFORMED_JSON;
+            this.metrics.recordSkipped(reason);
             log.warn(
                 "Skipping WriteRequest {} - unable to resolve or buffer: {}",
                 request.getRequestId(), ex.getMessage()
@@ -348,6 +370,7 @@ public class WriteQueueConsumer {
             UUID key = envelope.getRequest().getRequestId();
             IMap<UUID, WriteRequest> deadletter = this.writeHazelcastInstance.getMap(DEADLETTER_MAP_NAME);
             deadletter.put(key, envelope.getRequest());
+            this.metrics.recordDeadLetter(envelope.getRequest().getEntityClassName());
             log.error(
                 "DEAD-LETTER WriteRequest {} op={} type={} after {} attempts - requires operator attention",
                 key,

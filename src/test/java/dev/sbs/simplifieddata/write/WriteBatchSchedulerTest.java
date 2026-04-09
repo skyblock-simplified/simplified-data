@@ -19,6 +19,7 @@ import dev.simplified.persistence.source.IndexProvider;
 import dev.simplified.persistence.source.ManifestIndex;
 import dev.simplified.persistence.source.Source;
 import dev.simplified.persistence.source.WriteRequest;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -508,7 +509,7 @@ class WriteBatchSchedulerTest {
         private final List<RetryEnvelope> retries = new ArrayList<>();
 
         RecordingConsumer() {
-            super(noopHazelcastProxy(), new StubFactory(), 1L, 5, false);
+            super(noopHazelcastProxy(), new StubFactory(), new WriteMetrics(new SimpleMeterRegistry()), 1L, 5, false);
         }
 
         @Override

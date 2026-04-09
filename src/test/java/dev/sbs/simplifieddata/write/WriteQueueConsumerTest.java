@@ -25,6 +25,7 @@ import dev.simplified.persistence.source.IndexProvider;
 import dev.simplified.persistence.source.ManifestIndex;
 import dev.simplified.persistence.source.Source;
 import dev.simplified.persistence.source.WriteRequest;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -233,7 +234,7 @@ class WriteQueueConsumerTest {
     // --- helpers --- //
 
     private @NotNull WriteQueueConsumer newConsumer() {
-        return new WriteQueueConsumer(this.hazelcast, this.factory, 1L, 3, true);
+        return new WriteQueueConsumer(this.hazelcast, this.factory, new WriteMetrics(new SimpleMeterRegistry()), 1L, 3, true);
     }
 
     private static @NotNull ZodiacEvent newEvent(@NotNull String id, @NotNull String name, int releaseYear) {
