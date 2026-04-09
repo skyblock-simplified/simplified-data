@@ -346,13 +346,8 @@ public class AssetPoller {
 
         Object body = response.getBody();
 
-        if (!(body instanceof ConcurrentList<?> list) || list.isEmpty())
-            throw new IllegalStateException("Commits API 200 response body is not a non-empty commit list");
-
-        Object firstEntry = list.get(0);
-
-        if (!(firstEntry instanceof GitHubCommit commit))
-            throw new IllegalStateException("Commits API 200 first entry is not a GitHubCommit: " + firstEntry.getClass());
+        if (!(body instanceof GitHubCommit commit))
+            throw new IllegalStateException("Commits API 200 response body is not a GitHubCommit: " + (body == null ? "null" : body.getClass()));
 
         return Optional.of(new CommitProbe(commit.getSha(), etag));
     }

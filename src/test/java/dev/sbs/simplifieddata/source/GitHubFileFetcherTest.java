@@ -3,8 +3,6 @@ package dev.sbs.simplifieddata.source;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
-import dev.simplified.collection.Concurrent;
-import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.exception.JpaException;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
@@ -79,8 +77,8 @@ class GitHubFileFetcherTest {
     ) implements SkyBlockDataContract {
 
         @Override
-        public @NotNull ConcurrentList<GitHubCommit> getLatestMasterCommit() {
-            return Concurrent.newUnmodifiableList();
+        public @NotNull GitHubCommit getLatestMasterCommit() {
+            throw new UnsupportedOperationException("StubContract.getLatestMasterCommit not used by GitHubFileFetcherTest");
         }
 
         @Override

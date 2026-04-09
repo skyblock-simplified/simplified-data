@@ -1,6 +1,8 @@
 package dev.sbs.simplifieddata.client.response;
 
+import com.google.gson.Gson;
 import com.google.gson.annotations.SerializedName;
+import dev.simplified.client.Client;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -15,8 +17,8 @@ import org.jetbrains.annotations.NotNull;
  * {@code ExternalAssetState.commitSha}; {@link CommitDetail#committer} carries the ISO-8601
  * timestamp that the operator runbook surfaces for observability.
  *
- * <p>Instances are produced by {@link com.google.gson.Gson#fromJson} inside the
- * {@link dev.simplified.client.Client} response decoder pipeline - never constructed directly
+ * <p>Instances are produced by {@link Gson#fromJson} inside the
+ * {@link Client} response decoder pipeline - never constructed directly
  * by application code, which is why the constructor is private.
  *
  * @see <a href="https://docs.github.com/en/rest/commits/commits?apiVersion=2022-11-28">GitHub list commits</a>

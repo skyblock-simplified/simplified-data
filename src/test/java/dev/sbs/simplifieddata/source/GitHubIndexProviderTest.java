@@ -5,8 +5,6 @@ import dev.sbs.minecraftapi.MinecraftApi;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
-import dev.simplified.collection.Concurrent;
-import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.exception.JpaException;
 import dev.simplified.persistence.source.ManifestIndex;
 import org.jetbrains.annotations.NotNull;
@@ -70,7 +68,7 @@ class GitHubIndexProviderTest {
     void loadIndexParsesValidManifest() {
         GitHubIndexProvider provider = new GitHubIndexProvider(
             "skyblock-data",
-            new StubContract(path -> SAMPLE_MANIFEST_JSON, GitHubIndexProviderTest::emptyCommitList),
+            new StubContract(path -> SAMPLE_MANIFEST_JSON),
             this.gson
         );
 
@@ -94,7 +92,7 @@ class GitHubIndexProviderTest {
             new StubContract(path -> {
                 capturedPath.set(path);
                 return SAMPLE_MANIFEST_JSON;
-            }, GitHubIndexProviderTest::emptyCommitList),
+            }),
             this.gson
         );
 
@@ -108,7 +106,7 @@ class GitHubIndexProviderTest {
     void loadIndexWrapsContractException() {
         GitHubIndexProvider provider = new GitHubIndexProvider(
             "skyblock-data",
-            new StubContract(path -> { throw fakeException(404, "Not Found"); }, GitHubIndexProviderTest::emptyCommitList),
+            new StubContract(path -> { throw fakeException(404, "Not Found"); }),
             this.gson
         );
 
@@ -124,7 +122,7 @@ class GitHubIndexProviderTest {
     void loadIndexRejectsEmptyBody() {
         GitHubIndexProvider provider = new GitHubIndexProvider(
             "skyblock-data",
-            new StubContract(path -> "", GitHubIndexProviderTest::emptyCommitList),
+            new StubContract(path -> ""),
             this.gson
         );
 
@@ -133,10 +131,6 @@ class GitHubIndexProviderTest {
     }
 
     // --- stub plumbing below --- //
-
-    private static @NotNull ConcurrentList<GitHubCommit> emptyCommitList() {
-        return Concurrent.newUnmodifiableList();
-    }
 
     /**
      * Builds a stub SkyBlockDataException via a lightweight feign.Response.
@@ -163,18 +157,17 @@ class GitHubIndexProviderTest {
     }
 
     /**
-     * Hand-rolled {@link SkyBlockDataContract} stub that routes
-     * {@code getFileContent} and {@code getLatestMasterCommit} calls to the supplied
-     * lambdas. Implements the contract interface directly, no proxy.
+     * Hand-rolled {@link SkyBlockDataContract} stub that routes {@code getFileContent} calls
+     * to the supplied lambda. {@code getLatestMasterCommit} is not exercised by this test
+     * suite (it tests only the index-provider path) and throws on access.
      */
     private record StubContract(
-        @NotNull java.util.function.Function<String, String> fileContent,
-        @NotNull java.util.function.Supplier<ConcurrentList<GitHubCommit>> latestCommit
+        @NotNull java.util.function.Function<String, String> fileContent
     ) implements SkyBlockDataContract {
 
         @Override
-        public @NotNull ConcurrentList<GitHubCommit> getLatestMasterCommit() {
-            return this.latestCommit.get();
+        public @NotNull GitHubCommit getLatestMasterCommit() {
+            throw new UnsupportedOperationException("StubContract.getLatestMasterCommit not used by GitHubIndexProviderTest");
         }
 
         @Override

@@ -113,10 +113,10 @@ class AssetPollerTest {
     @Test
     @DisplayName("first poll populates ExternalAssetState and one row per manifest entry")
     void firstPollPopulatesState() {
-        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
-        this.contract.commitList = commits;
+        GitHubCommit commit = parseCommit("sha-one");
+        this.contract.commit = commit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
 
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
@@ -140,17 +140,17 @@ class AssetPollerTest {
     @Test
     @DisplayName("second poll with unchanged commit sha records a no-change cycle")
     void noChangePoll() {
-        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
-        this.contract.commitList = commits;
+        GitHubCommit commit = parseCommit("sha-one");
+        this.contract.commit = commit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
 
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
 
         // Second cycle: same commit list and ETag, scheduled cycle should observe equality
         // and short-circuit through recordNoChange().
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
         poller.scheduledPoll();
 
         this.assetSession.with(session -> {
@@ -164,19 +164,19 @@ class AssetPollerTest {
     @Test
     @DisplayName("second poll with fresh commit sha triggers diff and state update")
     void changePoll() {
-        ConcurrentList<GitHubCommit> firstCommits = parseCommits("sha-one");
-        this.contract.commitList = firstCommits;
+        GitHubCommit firstCommit = parseCommit("sha-one");
+        this.contract.commit = firstCommit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), firstCommits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), firstCommit);
 
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
 
         // Second cycle: a fresh commit sha and a new manifest with one changed entry hash.
-        ConcurrentList<GitHubCommit> secondCommits = parseCommits("sha-two");
-        this.contract.commitList = secondCommits;
+        GitHubCommit secondCommit = parseCommit("sha-two");
+        this.contract.commit = secondCommit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-two", "ccc", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-two\"")), secondCommits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-two\"")), secondCommit);
 
         poller.scheduledPoll();
 
@@ -198,10 +198,10 @@ class AssetPollerTest {
     @Test
     @DisplayName("Phase 5.5: first poll triggers refresh for every model class in the initial manifest")
     void firstPollTriggersRefreshForInitialManifestClasses() {
-        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
-        this.contract.commitList = commits;
+        GitHubCommit commit = parseCommit("sha-one");
+        this.contract.commit = commit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
 
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
@@ -220,19 +220,19 @@ class AssetPollerTest {
     @Test
     @DisplayName("Phase 5.5: change poll triggers refresh only for the models whose content changed")
     void changePollTriggersRefreshOnlyForChangedModels() {
-        ConcurrentList<GitHubCommit> firstCommits = parseCommits("sha-one");
-        this.contract.commitList = firstCommits;
+        GitHubCommit firstCommit = parseCommit("sha-one");
+        this.contract.commit = firstCommit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), firstCommits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), firstCommit);
 
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
 
         // Second cycle: items hash flipped, mobs hash unchanged. Only items should refresh.
-        ConcurrentList<GitHubCommit> secondCommits = parseCommits("sha-two");
-        this.contract.commitList = secondCommits;
+        GitHubCommit secondCommit = parseCommit("sha-two");
+        this.contract.commit = secondCommit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-two", "ccc", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-two\"")), secondCommits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-two\"")), secondCommit);
 
         poller.scheduledPoll();
 
@@ -246,16 +246,16 @@ class AssetPollerTest {
     @Test
     @DisplayName("Phase 5.5: no-change poll does not invoke the refresh trigger")
     void noChangePollDoesNotInvokeRefreshTrigger() {
-        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
-        this.contract.commitList = commits;
+        GitHubCommit commit = parseCommit("sha-one");
+        this.contract.commit = commit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
 
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
 
         // Second cycle: same commit sha, expecting the early-return recordNoChange path.
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
         poller.scheduledPoll();
 
         // Exactly one invocation from the initial manifest, not a second one for the no-change cycle.
@@ -265,13 +265,13 @@ class AssetPollerTest {
     @Test
     @DisplayName("Phase 5.5: unknown model_class is skipped with a WARN and refresh still fires for resolvable entries")
     void unknownModelClassIsSkipped() {
-        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
-        this.contract.commitList = commits;
+        GitHubCommit commit = parseCommit("sha-one");
+        this.contract.commit = commit;
         this.contract.fileContents.put(
             "data/v1/index.json",
             manifestWithModelClass("sha-one", "dev.sbs.minecraftapi.persistence.model.Item", "com.example.GhostModel")
         );
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
 
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
@@ -287,10 +287,10 @@ class AssetPollerTest {
     @Test
     @DisplayName("Phase 5.5: refresh trigger failure is isolated and does not crash the poll cycle")
     void refreshTriggerFailureIsIsolated() {
-        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
-        this.contract.commitList = commits;
+        GitHubCommit commit = parseCommit("sha-one");
+        this.contract.commit = commit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
         this.refreshTrigger.nextFailure = new RuntimeException("refresh failed for test");
 
         AssetPoller poller = newPoller(true);
@@ -309,10 +309,10 @@ class AssetPollerTest {
     @Test
     @DisplayName("cache-miss 304 revalidation bumps lastCheckedAt and skips manifest fetch")
     void cacheMiss304Revalidation() {
-        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
-        this.contract.commitList = commits;
+        GitHubCommit commit = parseCommit("sha-one");
+        this.contract.commit = commit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
 
         AssetPoller poller = newPoller(true);
         poller.onApplicationReady();
@@ -323,9 +323,9 @@ class AssetPollerTest {
         // body (for example after a TTL prune or a client restart). The common transparent-304
         // path - where the framework synthesizes a Response envelope with the cached body - is
         // exercised by the change/no-change tests above, since the contract-level stubs return
-        // a canned ConcurrentList just like a framework-synthesized response would.
+        // a canned GitHubCommit just like a framework-synthesized response would.
         this.contract.commitException = buildNotModified();
-        this.contract.commitList = null;
+        this.contract.commit = null;
         poller.scheduledPoll();
 
         this.assetSession.with(session -> {
@@ -355,10 +355,10 @@ class AssetPollerTest {
     @Test
     @DisplayName("pollEnabled=false short-circuits both startup and scheduled entry points")
     void pollDisabledSkipsBothEntryPoints() {
-        ConcurrentList<GitHubCommit> commits = parseCommits("sha-one");
-        this.contract.commitList = commits;
+        GitHubCommit commit = parseCommit("sha-one");
+        this.contract.commit = commit;
         this.contract.fileContents.put("data/v1/index.json", sampleManifest("sha-one", "aaa", "bbb"));
-        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commits);
+        this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), commit);
 
         AssetPoller poller = newPoller(false);
         poller.onApplicationReady();
@@ -447,27 +447,20 @@ class AssetPollerTest {
             """.formatted(commitSha, itemsModelClass, mobsModelClass);
     }
 
-    private static @NotNull ConcurrentList<GitHubCommit> parseCommits(@NotNull String sha) {
+    private static @NotNull GitHubCommit parseCommit(@NotNull String sha) {
         String json = """
-            [
-              {
-                "sha": "%s",
-                "commit": {
-                  "message": "test commit",
-                  "committer": {
-                    "name": "Tester",
-                    "date": "2026-04-07T00:00:00Z"
-                  }
+            {
+              "sha": "%s",
+              "commit": {
+                "message": "test commit",
+                "committer": {
+                  "name": "Tester",
+                  "date": "2026-04-07T00:00:00Z"
                 }
               }
-            ]
+            }
             """.formatted(sha);
-        // Build through Gson into a single-element ConcurrentList<GitHubCommit>.
-        GitHubCommit[] array = GSON.fromJson(json, GitHubCommit[].class);
-        ConcurrentList<GitHubCommit> list = Concurrent.newList();
-        for (GitHubCommit commit : array)
-            list.add(commit);
-        return list;
+        return GSON.fromJson(json, GitHubCommit.class);
     }
 
     private static @NotNull Response<?> response(int status, @NotNull Map<String, List<String>> headers, @NotNull Object body) {
@@ -537,18 +530,18 @@ class AssetPollerTest {
     private static final class StubContract implements SkyBlockDataContract {
 
         private final @NotNull Map<String, String> fileContents = new HashMap<>();
-        private @Nullable ConcurrentList<GitHubCommit> commitList;
+        private @Nullable GitHubCommit commit;
         private @Nullable RuntimeException commitException;
 
         @Override
-        public @NotNull ConcurrentList<GitHubCommit> getLatestMasterCommit() throws SkyBlockDataException {
+        public @NotNull GitHubCommit getLatestMasterCommit() throws SkyBlockDataException {
             if (this.commitException != null)
                 throw this.commitException;
 
-            if (this.commitList == null)
-                throw new IllegalStateException("StubContract.commitList not set - test should not call getLatestMasterCommit on this path");
+            if (this.commit == null)
+                throw new IllegalStateException("StubContract.commit not set - test should not call getLatestMasterCommit on this path");
 
-            return this.commitList;
+            return this.commit;
         }
 
         @Override

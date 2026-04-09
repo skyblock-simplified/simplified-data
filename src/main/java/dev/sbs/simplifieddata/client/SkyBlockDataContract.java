@@ -4,7 +4,6 @@ import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
 import dev.simplified.client.request.Contract;
 import dev.simplified.client.route.Route;
-import dev.simplified.collection.ConcurrentList;
 import feign.Param;
 import feign.RequestLine;
 import org.jetbrains.annotations.NotNull;
@@ -32,9 +31,12 @@ import org.jetbrains.annotations.NotNull;
  * (the {@code items.json} primary asset is 6.78 MB). Without this header the Contents endpoint
  * returns a base64-encoded JSON envelope capped at 1 MB which would reject {@code items.json}.
  *
- * <p>Phase 4b does not issue conditional {@code If-None-Match} requests. Phase 4c will attach
- * a dynamic {@code If-None-Match} header via {@link ETagContext} and wrap calls with
- * {@link ETagContext#callWithEtag(String, java.util.function.Supplier)}.
+ * <p>Conditional {@code If-None-Match} requests are handled automatically by the
+ * Phase 5.5.1 client-library update: the internal request interceptor auto-attaches the
+ * header on every {@code GET} when a matching cached response exists, and the response
+ * interceptor transparently serves cached bodies on {@code 304} by synthesizing a response
+ * envelope with {@link dev.simplified.client.response.HttpStatus#NOT_MODIFIED}. No caller
+ * wiring is required.
  *
  * @see <a href="https://docs.github.com/en/rest?apiVersion=2022-11-28">GitHub REST API v3</a>
  * @see dev.sbs.simplifieddata.config.GitHubConfig
@@ -43,20 +45,29 @@ import org.jetbrains.annotations.NotNull;
 public interface SkyBlockDataContract extends Contract {
 
     /**
-     * Fetches the most recent commit on the {@code master} branch of
+     * Fetches the current tip commit of the {@code master} branch of
      * {@code skyblock-simplified/skyblock-data}.
      *
-     * <p>Always returns a single-element list ordered newest-first. Callers pull
-     * {@code [0].sha} for the branch-tip SHA that Phase 4c will compare against
-     * {@code ExternalAssetState.commitSha}. The response ETag is available via
-     * {@link dev.simplified.client.Client#getLastResponse()} for conditional requests in
-     * Phase 4c.
+     * <p>Uses the single-commit-by-ref endpoint ({@code /commits/master}) rather than the
+     * listing endpoint ({@code /commits?sha=master&per_page=1}). This is load-bearing: the
+     * listing endpoint serves responses through GitHub's 60-second edge cache which can
+     * return stale commit SHAs for many minutes after a push (the {@code cache-control}
+     * header on that endpoint is {@code private, max-age=60, s-maxage=60}). The single-
+     * commit-by-ref endpoint resolves {@code master} via the git-protocol ref lookup and
+     * is always fresh, matching the freshness guarantees of
+     * {@code /git/refs/heads/master}.
      *
-     * @return single-element list containing the latest commit on master
+     * <p>Callers read {@link GitHubCommit#getSha()} for the branch-tip SHA that Phase 4c's
+     * {@code AssetPoller} compares against {@code ExternalAssetState.commitSha}. The
+     * response {@code ETag} header is available via
+     * {@link dev.simplified.client.Client#getLastResponse()} and drives the automatic
+     * {@code If-None-Match} path on subsequent polls.
+     *
+     * @return the current tip commit on master
      * @throws SkyBlockDataException on any non-2xx status
      */
-    @RequestLine("GET /repos/skyblock-simplified/skyblock-data/commits?sha=master&per_page=1")
-    @NotNull ConcurrentList<GitHubCommit> getLatestMasterCommit() throws SkyBlockDataException;
+    @RequestLine("GET /repos/skyblock-simplified/skyblock-data/commits/master")
+    @NotNull GitHubCommit getLatestMasterCommit() throws SkyBlockDataException;
 
     /**
      * Fetches the raw file body at the given path on the {@code master} branch of
