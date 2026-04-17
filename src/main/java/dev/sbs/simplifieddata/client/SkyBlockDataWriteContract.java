@@ -5,6 +5,7 @@ import dev.sbs.simplifieddata.client.request.PutContentRequest;
 import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
 import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.config.GitHubConfig;
+import dev.simplified.client.ClientConfig;
 import dev.simplified.client.request.Contract;
 import dev.simplified.client.route.Route;
 import feign.Param;
@@ -34,7 +35,7 @@ import org.jetbrains.annotations.NotNull;
  * <p>Authentication, the {@code X-GitHub-Api-Version: 2022-11-28} header, and the
  * {@code If-None-Match} auto-attach path are all shared with the read-path
  * client via the same {@code skyBlockDataAuthorizationSupplier} bean. The only
- * difference between the two clients' {@link dev.simplified.client.ClientOptions}
+ * difference between the two clients' {@link ClientConfig}
  * is the {@code Accept} header.
  *
  * <p>No disk overlay interaction happens through this contract. The Phase 6b

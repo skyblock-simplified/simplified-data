@@ -13,6 +13,7 @@ import dev.simplified.persistence.source.WriteRequest;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.log4j.Log4j2;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -239,10 +240,10 @@ public class WriteBatchScheduler {
      * status code when available, and falls back to coarse classification
      * (network / other) for everything else.
      */
-    private static @NotNull WriteMetrics.FailureReason deriveFailureReason(@org.jetbrains.annotations.Nullable Throwable cause) {
+    private static @NotNull WriteMetrics.FailureReason deriveFailureReason(@Nullable Throwable cause) {
         if (cause instanceof dev.sbs.simplifieddata.client.exception.SkyBlockDataException ex)
             return WriteMetrics.FailureReason.fromStatus(ex.getStatus().getCode());
-        if (cause instanceof java.net.SocketException || cause instanceof java.net.UnknownHostException || cause instanceof java.net.ConnectException)
+        if (cause instanceof java.net.SocketException || cause instanceof java.net.UnknownHostException)
             return WriteMetrics.FailureReason.NETWORK;
         return WriteMetrics.FailureReason.OTHER;
     }

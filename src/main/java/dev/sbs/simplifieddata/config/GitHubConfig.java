@@ -10,7 +10,7 @@ import dev.sbs.simplifieddata.client.request.PutContentRequest;
 import dev.sbs.simplifieddata.source.GitHubFileFetcher;
 import dev.sbs.simplifieddata.source.GitHubIndexProvider;
 import dev.simplified.client.Client;
-import dev.simplified.client.ClientOptions;
+import dev.simplified.client.ClientConfig;
 import dev.simplified.persistence.source.FileFetcher;
 import dev.simplified.persistence.source.IndexProvider;
 import lombok.extern.log4j.Log4j2;
@@ -48,21 +48,12 @@ import java.util.function.Supplier;
  * <p>Phase 5.5.1 note - {@code If-None-Match} conditional requests are handled automatically
  * by the {@code dev.simplified.client} library. {@code InternalRequestInterceptor} attaches
  * the header on every {@code GET} / {@code HEAD} when a matching cached response exists in
- * {@link Client#getRecentResponses()}, and {@code InternalResponseInterceptor} transparently
+ * {@link Client#getResponseCache()}, and {@code InternalResponseInterceptor} transparently
  * serves the cached body on {@code 304} by synthesizing a fresh response envelope with
  * {@link dev.simplified.client.response.HttpStatus#NOT_MODIFIED} as the wire-truth status.
  * Callers only see a {@link dev.simplified.client.exception.NotModifiedException} on the
  * rare cache-miss revalidation path (client restart, TTL prune, streaming endpoint). No
  * explicit {@code If-None-Match} supplier is needed here - the framework does it.
- *
- * <p>The default {@link dev.simplified.client.request.Timings#cacheDuration()} of one hour
- * and {@code maxCacheSize} of 100 are appropriate for {@code simplified-data}: the 41
- * entity files + the commits API response comfortably fit under the 100 cap, and steady-state
- * no-change polls synthesize additional {@code 304} entries whose borrowed body references
- * keep the original 200 bodies live via GC even after the 200 entries themselves age out.
- * {@code REDIRECTION} is a non-error state, so synthesized 304 responses pass the
- * framework's {@code !response.isError()} cache filter and keep the auto-attach chain alive
- * indefinitely.
  *
  * <p>None of these beans issue any network I/O at construction. The {@link Client} wrapper
  * builds the Feign proxy and Apache HttpClient connection pool lazily on the first contract
@@ -159,7 +150,7 @@ public class GitHubConfig {
     ) {
         Gson gson = MinecraftApi.getGson();
 
-        ClientOptions<SkyBlockDataContract> options = ClientOptions.builder(SkyBlockDataContract.class, gson)
+        ClientConfig<SkyBlockDataContract> options = ClientConfig.builder(SkyBlockDataContract.class, gson)
             .withHeader("Accept", GITHUB_RAW_ACCEPT)
             .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .withDynamicHeader("Authorization", skyBlockDataAuthorizationSupplier)
@@ -211,7 +202,7 @@ public class GitHubConfig {
     ) {
         Gson gson = MinecraftApi.getGson();
 
-        ClientOptions<SkyBlockDataWriteContract> options = ClientOptions.builder(SkyBlockDataWriteContract.class, gson)
+        ClientConfig<SkyBlockDataWriteContract> options = ClientConfig.builder(SkyBlockDataWriteContract.class, gson)
             .withHeader("Accept", GITHUB_JSON_ACCEPT)
             .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .withDynamicHeader("Authorization", skyBlockDataAuthorizationSupplier)
@@ -268,7 +259,7 @@ public class GitHubConfig {
     ) {
         Gson gson = MinecraftApi.getGson();
 
-        ClientOptions<SkyBlockGitDataContract> options = ClientOptions.builder(SkyBlockGitDataContract.class, gson)
+        ClientConfig<SkyBlockGitDataContract> options = ClientConfig.builder(SkyBlockGitDataContract.class, gson)
             .withHeader("Accept", GITHUB_JSON_ACCEPT)
             .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .withDynamicHeader("Authorization", skyBlockDataAuthorizationSupplier)
