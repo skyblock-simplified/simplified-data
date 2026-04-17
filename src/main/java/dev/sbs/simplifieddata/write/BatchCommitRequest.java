@@ -133,8 +133,8 @@ public final class BatchCommitRequest {
         /** @return the fully accumulated request. */
         public @NotNull BatchCommitRequest build() {
             return new BatchCommitRequest(
-                this.fileContents.toUnmodifiableMap(),
-                this.sourceBatches.toUnmodifiableList(),
+                this.fileContents.toUnmodifiable(),
+                this.sourceBatches.toUnmodifiable(),
                 this.totalMutationCount
             );
         }

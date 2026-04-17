@@ -10,6 +10,7 @@ import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.write.BufferedMutation;
 import dev.sbs.simplifieddata.write.StagedBatch;
 import dev.sbs.simplifieddata.write.WriteMetrics;
+import dev.sbs.simplifieddata.write.WriteQueueConsumer;
 import dev.simplified.client.exception.PreconditionFailedException;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
@@ -537,8 +538,8 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
         );
         return new StagedBatch<>(
             this.modelClass,
-            fileSnapshots.toUnmodifiableMap(),
-            mutationList.toUnmodifiableList(),
+            fileSnapshots.toUnmodifiable(),
+            mutationList.toUnmodifiable(),
             snapshot.size()
         );
     }
@@ -893,7 +894,7 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
         ) {
             ConcurrentList<BufferedMutation<?>> copy = Concurrent.newList();
             copy.addAll(failures);
-            return new CommitBatchResult(0, null, copy.toUnmodifiableList(), cause);
+            return new CommitBatchResult(0, null, copy.toUnmodifiable(), cause);
         }
 
     }

@@ -1,8 +1,8 @@
 package dev.sbs.simplifieddata.persistence;
 
 import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.minecraftapi.generator.text.ChatFormat;
 import dev.sbs.minecraftapi.persistence.model.*;
+import dev.sbs.renderer.text.ChatColor;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.JpaCacheProvider;
 import dev.simplified.persistence.Repository;
@@ -14,12 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.empty;
-import static org.hamcrest.Matchers.hasItem;
-import static org.hamcrest.Matchers.hasItems;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.not;
-import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.*;
 
 /**
  * Drives the production SkyBlock model layer through {@link JpaCacheProvider#HAZELCAST_EMBEDDED}
@@ -85,7 +80,7 @@ public class JpaModelHazelcastTest {
 
         Region hub = repo.findFirst(Region::getId, "HUB").orElseThrow();
         assertThat(hub.getName(), is("Hub"));
-        assertThat(hub.getFormat(), is(ChatFormat.WHITE));
+        assertThat(hub.getFormat(), is(ChatColor.Legacy.WHITE));
         assertThat(hub.getGameType(), is("SKYBLOCK"));
         assertThat(hub.getMode(), is("HUB"));
     }
@@ -99,7 +94,7 @@ public class JpaModelHazelcastTest {
 
         StatCategory combat = repo.findFirst(StatCategory::getId, "COMBAT").orElseThrow();
         assertThat(combat.getName(), is("Combat"));
-        assertThat(combat.getFormat(), is(ChatFormat.RED));
+        assertThat(combat.getFormat(), is(ChatColor.Legacy.RED));
     }
 
     @Test
@@ -111,7 +106,7 @@ public class JpaModelHazelcastTest {
 
         MobType undead = repo.findFirst(MobType::getId, "UNDEAD").orElseThrow();
         assertThat(undead.getName(), is("Undead"));
-        assertThat(undead.getFormat(), is(ChatFormat.DARK_GREEN));
+        assertThat(undead.getFormat(), is(ChatColor.Legacy.DARK_GREEN));
     }
 
     @Test

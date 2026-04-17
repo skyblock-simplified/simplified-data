@@ -2,8 +2,12 @@ package dev.sbs.simplifieddata.client;
 
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
+import dev.sbs.simplifieddata.config.GitHubConfig;
+import dev.simplified.client.Client;
 import dev.simplified.client.request.Contract;
+import dev.simplified.client.response.HttpStatus;
 import dev.simplified.client.route.Route;
+import dev.simplified.persistence.source.ManifestIndex;
 import feign.Param;
 import feign.RequestLine;
 import org.jetbrains.annotations.NotNull;
@@ -35,11 +39,11 @@ import org.jetbrains.annotations.NotNull;
  * Phase 5.5.1 client-library update: the internal request interceptor auto-attaches the
  * header on every {@code GET} when a matching cached response exists, and the response
  * interceptor transparently serves cached bodies on {@code 304} by synthesizing a response
- * envelope with {@link dev.simplified.client.response.HttpStatus#NOT_MODIFIED}. No caller
+ * envelope with {@link HttpStatus#NOT_MODIFIED}. No caller
  * wiring is required.
  *
  * @see <a href="https://docs.github.com/en/rest?apiVersion=2022-11-28">GitHub REST API v3</a>
- * @see dev.sbs.simplifieddata.config.GitHubConfig
+ * @see GitHubConfig
  */
 @Route("api.github.com")
 public interface SkyBlockDataContract extends Contract {
@@ -59,9 +63,8 @@ public interface SkyBlockDataContract extends Contract {
      *
      * <p>Callers read {@link GitHubCommit#getSha()} for the branch-tip SHA that Phase 4c's
      * {@code AssetPoller} compares against {@code ExternalAssetState.commitSha}. The
-     * response {@code ETag} header is available via
-     * {@link dev.simplified.client.Client#getLastResponse()} and drives the automatic
-     * {@code If-None-Match} path on subsequent polls.
+     * response {@code ETag} header is available via {@link Client#getLastResponse()}
+     * and drives the automatic @code If-None-Match} path on subsequent polls.
      *
      * @return the current tip commit on master
      * @throws SkyBlockDataException on any non-2xx status
@@ -86,7 +89,7 @@ public interface SkyBlockDataContract extends Contract {
      * bytes to a UTF-8 string via {@link java.nio.charset.StandardCharsets#UTF_8} in one line.
      *
      * @param path the repo-root-relative file path from a
-     *             {@link dev.simplified.persistence.source.ManifestIndex.Entry},
+     *             {@link ManifestIndex.Entry},
      *             e.g. {@code "data/v1/items/items.json"}
      * @return the raw file body bytes
      * @throws SkyBlockDataException on any non-2xx status
