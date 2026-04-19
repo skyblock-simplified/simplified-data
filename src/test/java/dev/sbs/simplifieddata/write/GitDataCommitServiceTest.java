@@ -1,8 +1,8 @@
 package dev.sbs.simplifieddata.write;
 
 import com.google.gson.Gson;
-import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.minecraftapi.persistence.model.ZodiacEvent;
+import dev.sbs.simplifieddata.DataApi;
+import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.sbs.simplifieddata.client.SkyBlockGitDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.CreateBlobRequest;
@@ -61,7 +61,7 @@ import static org.hamcrest.Matchers.is;
  */
 class GitDataCommitServiceTest {
 
-    private static final @NotNull Gson GSON = MinecraftApi.getGson();
+    private static final @NotNull Gson GSON = DataApi.getGson();
     private static final @NotNull String INITIAL_COMMIT_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final @NotNull String INITIAL_TREE_SHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private static final @NotNull String NEW_COMMIT_SHA = "cccccccccccccccccccccccccccccccccccccccc";

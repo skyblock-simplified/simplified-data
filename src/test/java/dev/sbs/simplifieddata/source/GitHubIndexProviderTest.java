@@ -1,7 +1,7 @@
 package dev.sbs.simplifieddata.source;
 
 import com.google.gson.Gson;
-import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.simplifieddata.DataApi;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * Unit tests for {@link GitHubIndexProvider}.
  *
  * <p>The Feign contract is stubbed with a plain Java implementation; the Gson instance is
- * reused from {@link MinecraftApi#getGson()} so the production {@code ConcurrentList} type
+ * reused from {@code DataApi.getGson()} so the production {@code ConcurrentList} type
  * adapter is in play. No network I/O.
  */
 class GitHubIndexProviderTest {
@@ -37,7 +37,7 @@ class GitHubIndexProviderTest {
               "path": "data/v1/items/items.json",
               "category": "items",
               "table_name": "item",
-              "model_class": "dev.sbs.minecraftapi.model.Item",
+              "model_class": "dev.sbs.skyblockdata.model.Item",
               "content_sha256": "deadbeef",
               "bytes": 7102271,
               "has_extra": true,
@@ -49,7 +49,7 @@ class GitHubIndexProviderTest {
               "path": "data/v1/modifiers/reforges.json",
               "category": "modifiers",
               "table_name": "reforge",
-              "model_class": "dev.sbs.minecraftapi.model.Reforge",
+              "model_class": "dev.sbs.skyblockdata.model.Reforge",
               "content_sha256": "feedface",
               "bytes": 1024,
               "has_extra": false
@@ -58,7 +58,7 @@ class GitHubIndexProviderTest {
         }
         """;
 
-    private final @NotNull Gson gson = MinecraftApi.getGson();
+    private final @NotNull Gson gson = DataApi.getGson();
 
     @Test
     @DisplayName("loadIndex() parses a valid manifest into a ManifestIndex")

@@ -1,10 +1,10 @@
 package dev.sbs.simplifieddata.persistence;
 
 import com.google.gson.Gson;
-import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.minecraftapi.persistence.SkyBlockFactory;
-import dev.sbs.minecraftapi.persistence.model.Accessory;
-import dev.sbs.minecraftapi.persistence.model.Item;
+import dev.sbs.simplifieddata.DataApi;
+import dev.sbs.skyblockdata.SkyBlockFactory;
+import dev.sbs.skyblockdata.model.Accessory;
+import dev.sbs.skyblockdata.model.Item;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.PutContentRequest;
@@ -41,8 +41,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * Unit tests for {@link RemoteSkyBlockFactory}. Does NOT boot a Spring context, does NOT
  * require a live Hazelcast cluster, and does NOT touch the network - the GitHub
  * {@link IndexProvider} and {@link FileFetcher} collaborators are hand-rolled stubs that
- * throw on call. Model enumeration is driven by the real {@link SkyBlockFactory} registered
- * in {@link MinecraftApi}.
+ * throw on call. Model enumeration is driven by a fresh {@link SkyBlockFactory} instance
+ * constructed directly from {@code skyblock-data-api}.
  */
 final class RemoteSkyBlockFactoryTest {
 
@@ -74,7 +74,7 @@ final class RemoteSkyBlockFactoryTest {
 
     };
 
-    private static final @NotNull Gson GSON = MinecraftApi.getGson();
+    private static final @NotNull Gson GSON = DataApi.getGson();
 
     private static @NotNull RemoteSkyBlockFactory newFactory(@NotNull SkyBlockFactory delegate) {
         return new RemoteSkyBlockFactory(
@@ -85,7 +85,7 @@ final class RemoteSkyBlockFactoryTest {
 
     @Test
     void wiresEveryModelWithDiskOverlaySourceWrappingRemoteJsonSource() {
-        SkyBlockFactory delegate = MinecraftApi.getSkyBlockFactory();
+        SkyBlockFactory delegate = new dev.sbs.skyblockdata.SkyBlockFactory();
         RemoteSkyBlockFactory factory = newFactory(delegate);
 
         assertThat(factory.getModels().size(), equalTo(delegate.getModels().size()));
@@ -119,7 +119,7 @@ final class RemoteSkyBlockFactoryTest {
 
     @Test
     void keyedMapContainsKnownModelClasses() {
-        SkyBlockFactory delegate = MinecraftApi.getSkyBlockFactory();
+        SkyBlockFactory delegate = new dev.sbs.skyblockdata.SkyBlockFactory();
         RemoteSkyBlockFactory factory = newFactory(delegate);
 
         assertThat(factory.getSources(), hasKey(Item.class));

@@ -1,7 +1,7 @@
 package dev.sbs.simplifieddata.poller;
 
 import com.google.gson.Gson;
-import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.simplifieddata.DataApi;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
@@ -113,7 +113,7 @@ public class AssetPoller {
     /** The decoupled accessor for {@code Client.getLastResponse()}. */
     private final @NotNull LastResponseAccessor lastResponseAccessor;
 
-    /** The Gson instance used to parse the manifest body. Reuses {@code MinecraftApi.getGson()} for {@code ConcurrentList} support. */
+    /** The Gson instance used to parse the manifest body. Reuses {@code DataApi.getGson()} for {@code ConcurrentList} support. */
     private final @NotNull Gson gson;
 
     /** The {@code ExternalAssetState.sourceId} natural key used by every poll cycle. */
@@ -157,7 +157,7 @@ public class AssetPoller {
         this.refreshTrigger = refreshTrigger;
         this.contract = contract;
         this.lastResponseAccessor = lastResponseAccessor;
-        this.gson = MinecraftApi.getGson();
+        this.gson = DataApi.getGson();
         this.sourceId = sourceId;
         this.pollEnabled = pollEnabled;
     }

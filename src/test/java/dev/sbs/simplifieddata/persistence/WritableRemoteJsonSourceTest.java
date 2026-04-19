@@ -1,8 +1,8 @@
 package dev.sbs.simplifieddata.persistence;
 
 import com.google.gson.Gson;
-import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.minecraftapi.persistence.model.ZodiacEvent;
+import dev.sbs.simplifieddata.DataApi;
+import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.PutContentRequest;
@@ -71,7 +71,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 class WritableRemoteJsonSourceTest {
 
-    private static final @NotNull Gson GSON = MinecraftApi.getGson();
+    private static final @NotNull Gson GSON = DataApi.getGson();
     private static final @NotNull String SOURCE_ID = "skyblock-data";
     private static final @NotNull String FILE_PATH = "data/v1/world/zodiac_events.json";
     private static final @NotNull String INITIAL_BLOB_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

@@ -111,15 +111,15 @@ class WriteMetricsTest {
     @Test
     @DisplayName("recordDeadLetter tags the counter by entity class FQCN")
     void recordDeadLetterTagsByFqcn() {
-        this.metrics.recordDeadLetter("dev.sbs.minecraftapi.persistence.model.ZodiacEvent");
-        this.metrics.recordDeadLetter("dev.sbs.minecraftapi.persistence.model.Item");
+        this.metrics.recordDeadLetter("dev.sbs.skyblockdata.model.ZodiacEvent");
+        this.metrics.recordDeadLetter("dev.sbs.skyblockdata.model.Item");
 
         assertThat(
-            this.registry.find(WriteMetrics.METER_DEADLETTER_ADDED).tag("type", "dev.sbs.minecraftapi.persistence.model.ZodiacEvent").counter().count(),
+            this.registry.find(WriteMetrics.METER_DEADLETTER_ADDED).tag("type", "dev.sbs.skyblockdata.model.ZodiacEvent").counter().count(),
             is(equalTo(1.0))
         );
         assertThat(
-            this.registry.find(WriteMetrics.METER_DEADLETTER_ADDED).tag("type", "dev.sbs.minecraftapi.persistence.model.Item").counter().count(),
+            this.registry.find(WriteMetrics.METER_DEADLETTER_ADDED).tag("type", "dev.sbs.skyblockdata.model.Item").counter().count(),
             is(equalTo(1.0))
         );
     }

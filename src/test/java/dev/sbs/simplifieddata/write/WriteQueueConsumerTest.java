@@ -7,8 +7,8 @@ import com.hazelcast.config.NetworkConfig;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
-import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.minecraftapi.persistence.model.ZodiacEvent;
+import dev.sbs.simplifieddata.DataApi;
+import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.PutContentRequest;
@@ -99,7 +99,7 @@ class WriteQueueConsumerTest {
         WriteQueueConsumer consumer = newConsumer();
 
         ZodiacEvent event = newEvent("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
-        WriteRequest request = WriteRequest.upsert(ZodiacEvent.class, event, MinecraftApi.getGson(), "skyblock-data");
+        WriteRequest request = WriteRequest.upsert(ZodiacEvent.class, event, DataApi.getGson(), "skyblock-data");
 
         IQueue<WriteRequest> queue = this.hazelcast.getQueue(WriteQueueConsumer.QUEUE_NAME);
         queue.put(request);
@@ -121,7 +121,7 @@ class WriteQueueConsumerTest {
         WriteQueueConsumer consumer = newConsumer();
 
         ZodiacEvent event = newEvent("YEAR_OF_THE_WHALE", "Year of the Whale", 413);
-        WriteRequest request = WriteRequest.delete(ZodiacEvent.class, event, MinecraftApi.getGson(), "skyblock-data");
+        WriteRequest request = WriteRequest.delete(ZodiacEvent.class, event, DataApi.getGson(), "skyblock-data");
 
         IQueue<WriteRequest> queue = this.hazelcast.getQueue(WriteQueueConsumer.QUEUE_NAME);
         queue.put(request);
@@ -140,7 +140,7 @@ class WriteQueueConsumerTest {
         WriteQueueConsumer consumer = newConsumer();
 
         ZodiacEvent event = newEvent("YEAR_OF_THE_DOLPHIN", "Year of the Dolphin", 415);
-        WriteRequest request = WriteRequest.upsert(ZodiacEvent.class, event, MinecraftApi.getGson(), "skyblock-data");
+        WriteRequest request = WriteRequest.upsert(ZodiacEvent.class, event, DataApi.getGson(), "skyblock-data");
         RetryEnvelope envelope = RetryEnvelope.forRetry(request, 10, Instant.now());
 
         consumer.scheduleRetry(envelope);
@@ -156,7 +156,7 @@ class WriteQueueConsumerTest {
         WriteQueueConsumer consumer = newConsumer();
 
         ZodiacEvent event = newEvent("YEAR_OF_THE_OCTOPUS", "Year of the Octopus", 416);
-        WriteRequest request = WriteRequest.upsert(ZodiacEvent.class, event, MinecraftApi.getGson(), "skyblock-data");
+        WriteRequest request = WriteRequest.upsert(ZodiacEvent.class, event, DataApi.getGson(), "skyblock-data");
         // Set readyAt in the past so the retry is immediately eligible on the next drain scan.
         RetryEnvelope envelope = RetryEnvelope.forRetry(request, 1, Instant.now().minusSeconds(1));
 
@@ -188,7 +188,7 @@ class WriteQueueConsumerTest {
         // Put an entry directly into the IMap WITHOUT going through scheduleRetry,
         // simulating a restart where the previous process's entry is still in the map.
         ZodiacEvent event = newEvent("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
-        WriteRequest request = WriteRequest.upsert(ZodiacEvent.class, event, MinecraftApi.getGson(), "skyblock-data");
+        WriteRequest request = WriteRequest.upsert(ZodiacEvent.class, event, DataApi.getGson(), "skyblock-data");
         RetryEnvelope envelope = RetryEnvelope.forRetry(request, 2, Instant.now().minusSeconds(1));
 
         IMap<UUID, RetryEnvelope> retryMap = this.hazelcast.getMap(WriteQueueConsumer.RETRY_MAP_NAME);
@@ -216,7 +216,7 @@ class WriteQueueConsumerTest {
         WriteQueueConsumer consumer = newConsumer();
 
         ZodiacEvent event = newEvent("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
-        WriteRequest skipped = WriteRequest.upsert(ZodiacEvent.class, event, MinecraftApi.getGson(), "skyblock-data");
+        WriteRequest skipped = WriteRequest.upsert(ZodiacEvent.class, event, DataApi.getGson(), "skyblock-data");
 
         IQueue<WriteRequest> queue = this.hazelcast.getQueue(WriteQueueConsumer.QUEUE_NAME);
         queue.put(skipped);
@@ -275,7 +275,7 @@ class WriteQueueConsumerTest {
                 () -> { throw new UnsupportedOperationException(); },
                 path -> { throw new UnsupportedOperationException(); },
                 new ThrowingContract(),
-                MinecraftApi.getGson(),
+                DataApi.getGson(),
                 java.nio.file.Path.of("target/stub-overlay-does-not-exist"),
                 3,
                 new WriteMetrics(new SimpleMeterRegistry())
@@ -294,7 +294,7 @@ class WriteQueueConsumerTest {
 
     }
 
-    private static final class EmptySkyBlockFactory extends dev.sbs.minecraftapi.persistence.SkyBlockFactory {
+    private static final class EmptySkyBlockFactory extends dev.sbs.skyblockdata.SkyBlockFactory {
 
         @Override
         public @NotNull ConcurrentList<Class<JpaModel>> getModels() {
@@ -318,7 +318,7 @@ class WriteQueueConsumerTest {
                 new ThrowingContract(),
                 new ThrowingFileFetcher(),
                 new EmptyIndexProvider(),
-                MinecraftApi.getGson(),
+                DataApi.getGson(),
                 "recording-" + modelClass.getSimpleName(),
                 modelClass,
                 3,

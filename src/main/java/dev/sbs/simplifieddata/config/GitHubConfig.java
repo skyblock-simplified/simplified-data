@@ -1,7 +1,7 @@
 package dev.sbs.simplifieddata.config;
 
 import com.google.gson.Gson;
-import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.simplifieddata.DataApi;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.client.SkyBlockGitDataContract;
@@ -136,7 +136,7 @@ public class GitHubConfig {
      * matching the {@code HypixelApiException} / {@code SbsApiException} /
      * {@code MojangApiException} pattern in {@code minecraft-api}.
      *
-     * <p>The Gson instance is obtained from {@link MinecraftApi#getGson()} so the client
+     * <p>The Gson instance is obtained from {@link DataApi#getGson()} so the client
      * reuses the {@code ConcurrentList} type adapter, the {@code JpaExclusionStrategy}, and
      * the SkyBlock type adapters. Creating a fresh {@code new Gson()} here would break
      * {@code ConcurrentList<GitHubCommit>} deserialization on the commit response.
@@ -148,7 +148,7 @@ public class GitHubConfig {
     public @NotNull Client<SkyBlockDataContract> skyBlockDataClient(
         @Qualifier("skyBlockDataAuthorizationSupplier") @NotNull Supplier<Optional<String>> skyBlockDataAuthorizationSupplier
     ) {
-        Gson gson = MinecraftApi.getGson();
+        Gson gson = DataApi.getGson();
 
         ClientConfig<SkyBlockDataContract> options = ClientConfig.builder(SkyBlockDataContract.class, gson)
             .withHeader("Accept", GITHUB_RAW_ACCEPT)
@@ -200,7 +200,7 @@ public class GitHubConfig {
     public @NotNull Client<SkyBlockDataWriteContract> skyBlockDataWriteClient(
         @Qualifier("skyBlockDataAuthorizationSupplier") @NotNull Supplier<Optional<String>> skyBlockDataAuthorizationSupplier
     ) {
-        Gson gson = MinecraftApi.getGson();
+        Gson gson = DataApi.getGson();
 
         ClientConfig<SkyBlockDataWriteContract> options = ClientConfig.builder(SkyBlockDataWriteContract.class, gson)
             .withHeader("Accept", GITHUB_JSON_ACCEPT)
@@ -257,7 +257,7 @@ public class GitHubConfig {
     public @NotNull Client<SkyBlockGitDataContract> skyBlockGitDataClient(
         @Qualifier("skyBlockDataAuthorizationSupplier") @NotNull Supplier<Optional<String>> skyBlockDataAuthorizationSupplier
     ) {
-        Gson gson = MinecraftApi.getGson();
+        Gson gson = DataApi.getGson();
 
         ClientConfig<SkyBlockGitDataContract> options = ClientConfig.builder(SkyBlockGitDataContract.class, gson)
             .withHeader("Accept", GITHUB_JSON_ACCEPT)
@@ -295,7 +295,7 @@ public class GitHubConfig {
      */
     @Bean
     public @NotNull IndexProvider gitHubIndexProvider(@NotNull Client<SkyBlockDataContract> skyBlockDataClient) {
-        return new GitHubIndexProvider(SOURCE_ID, skyBlockDataClient.getContract(), MinecraftApi.getGson());
+        return new GitHubIndexProvider(SOURCE_ID, skyBlockDataClient.getContract(), DataApi.getGson());
     }
 
     /**

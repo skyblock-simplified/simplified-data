@@ -4,7 +4,7 @@ import com.google.gson.Gson;
 import com.hazelcast.collection.IQueue;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
-import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.simplifieddata.DataApi;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.persistence.WritableRemoteJsonSource;
 import dev.simplified.persistence.JpaModel;
@@ -126,7 +126,7 @@ public class WriteQueueConsumer {
         this.writeHazelcastInstance = skyBlockWriteHazelcastInstance;
         this.factory = remoteSkyBlockFactory;
         this.metrics = writeMetrics;
-        this.gson = MinecraftApi.getGson();
+        this.gson = DataApi.getGson();
         // retryInitialDelayMinutes is retained as a constructor parameter for
         // backwards-compatible property binding; the actual backoff math lives in
         // WriteBatchScheduler which owns the escalation call site and has the

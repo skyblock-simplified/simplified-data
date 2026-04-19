@@ -2,8 +2,8 @@ package dev.sbs.simplifieddata.config;
 
 import com.hazelcast.client.HazelcastClient;
 import com.hazelcast.core.HazelcastInstance;
-import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.minecraftapi.persistence.SkyBlockFactory;
+import dev.sbs.simplifieddata.DataApi;
+import dev.sbs.skyblockdata.SkyBlockFactory;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
@@ -45,7 +45,7 @@ import java.nio.file.Path;
  * <ul>
  *   <li>{@code skyBlockSession} - the SkyBlock entity session backed by
  *       {@link JpaCacheProvider#HAZELCAST_CLIENT}, scoped to
- *       {@code dev.sbs.minecraftapi.persistence.model}. Phase 5 wires its
+ *       {@code dev.sbs.skyblockdata.model}. Phase 5 wires its
  *       {@link RepositoryFactory} to a {@link RemoteSkyBlockFactory} so every repository
  *       loads its data from the {@code skyblock-data} GitHub repo via
  *       {@link dev.simplified.persistence.source.RemoteJsonSource} with an optional
@@ -59,7 +59,7 @@ import java.nio.file.Path;
  * </ul>
  *
  * <p>The split is deliberate: {@code SkyBlockFactory} anchors its classpath scan at
- * {@code dev.sbs.minecraftapi.persistence.model.Item.class}, which does NOT prefix-match
+ * {@code dev.sbs.skyblockdata.model.Item.class}, which does NOT prefix-match
  * the sibling {@code dev.simplified.persistence.asset} package, so the Phase 4a asset
  * entities are invisible to the SkyBlock session. Rather than coupling {@code minecraft-api}
  * to the asset schema (which is a Phase 5 concern), Phase 4c carries a dedicated second
@@ -85,18 +85,16 @@ public class PersistenceConfig {
      * layer.
      *
      * <p>This replaces the Phase 2c one-liner
-     * {@code MinecraftApi.connectSkyBlockSession(JpaCacheProvider.HAZELCAST_CLIENT)}. Every
-     * setting the one-liner preserved - driver, schema, Gson string-type mutation, query cache,
+     * {@code SkyBlockData.connect(JpaCacheProvider.HAZELCAST_CLIENT, ...)}. Every
+     * setting the one-liner preserves - driver, schema, Gson string-type mutation, query cache,
      * L2 cache, {@code READ_WRITE} concurrency, {@code CREATE_WARN} missing-cache strategy,
-     * 30-second query TTL - is reproduced verbatim here because the {@link MinecraftApi}
-     * overload hardcodes {@link SkyBlockFactory} and cannot accept a caller-supplied factory.
-     * Drift between this block and the
-     * {@code MinecraftApi.connectSkyBlockSession(JpaCacheProvider)} method is a Phase 5
-     * regression hazard - if {@code minecraft-api} ever adds a new setting to the one-liner,
-     * mirror it here.
+     * 30-second query TTL - is reproduced verbatim here because the
+     * {@code SkyBlockData.connect} overload hardcodes its own {@link SkyBlockFactory} and
+     * cannot accept a caller-supplied factory carrying the Phase 5
+     * {@link RemoteSkyBlockFactory} wrapper.
      *
      * <p>Session ownership is local: the bean constructs a fresh {@link SessionManager} rather
-     * than reusing {@link MinecraftApi#getSessionManager()}. This matches the
+     * than reusing the {@code skyblock-data-api} shared manager. This matches the
      * {@link #assetSession()} pattern and keeps shutdown cleanly scoped to the Spring context.
      *
      * <p>Phase 6b split the factory construction into a dedicated
@@ -122,14 +120,14 @@ public class PersistenceConfig {
         @Value("${skyblock.data.overlay.path:skyblock-data-overlay}") @NotNull String overlayBasePath,
         @Value("${skyblock.data.github.write-412-immediate-retries:3}") int max412ImmediateRetries
     ) {
-        SkyBlockFactory skyBlockFactory = MinecraftApi.getSkyBlockFactory();
+        SkyBlockFactory skyBlockFactory = new dev.sbs.skyblockdata.SkyBlockFactory();
         return new RemoteSkyBlockFactory(
             GitHubConfig.SOURCE_ID,
             skyBlockFactory,
             gitHubIndexProvider,
             gitHubFileFetcher,
             skyBlockDataWriteContract,
-            MinecraftApi.getGson(),
+            DataApi.getGson(),
             Path.of(overlayBasePath),
             max412ImmediateRetries,
             writeMetrics
@@ -147,8 +145,7 @@ public class PersistenceConfig {
             .withCacheProvider(JpaCacheProvider.HAZELCAST_CLIENT)
             .withRepositoryFactory(remoteSkyBlockFactory)
             .withGsonSettings(
-                MinecraftApi.getServiceManager()
-                    .get(GsonSettings.class)
+                DataApi.getGsonSettings()
                     .mutate()
                     .withStringType(GsonSettings.StringType.DEFAULT)
                     .build()
@@ -178,9 +175,9 @@ public class PersistenceConfig {
      * is the provider because the asset-state tables are single-writer in-process state.
      *
      * <p>The bean delegates to a locally constructed {@link SessionManager} rather than
-     * the shared {@link MinecraftApi#getSessionManager()}, so that shutdown of one session
-     * does not cascade into the other. The returned {@code JpaSession} is registered with
-     * the local manager and lives for the lifetime of the Spring context.
+     * the shared {@code SkyBlockData} manager, so that shutdown of one session does not
+     * cascade into the other. The returned {@code JpaSession} is registered with the local
+     * manager and lives for the lifetime of the Spring context.
      *
      * @return the asset-state {@link JpaSession}
      */

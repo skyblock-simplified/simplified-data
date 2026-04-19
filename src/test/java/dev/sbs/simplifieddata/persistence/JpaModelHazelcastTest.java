@@ -1,7 +1,7 @@
 package dev.sbs.simplifieddata.persistence;
 
-import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.minecraftapi.persistence.model.*;
+import dev.sbs.skyblockdata.SkyBlockData;
+import dev.sbs.skyblockdata.model.*;
 import lib.minecraft.text.ChatColor;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.JpaCacheProvider;
@@ -26,7 +26,7 @@ import static org.hamcrest.Matchers.*;
  * {@code minecraft-api}'s because {@code simplified-data} has no {@code TestLifecycleListener}
  * auto-connect, leaving its test JVM as a clean slate for {@link #beforeAll()} to register the
  * sole SkyBlock {@link dev.simplified.persistence.JpaSession} via
- * {@link MinecraftApi#connectSkyBlockSession(JpaCacheProvider)} with
+ * {@code SkyBlockData.connect(JpaCacheProvider, GsonSettings)} with
  * {@link JpaCacheProvider#HAZELCAST_EMBEDDED}.</p>
  *
  * <p>Test resource {@code hazelcast.xml} on the classpath bootstraps the in-process Hazelcast
@@ -34,7 +34,7 @@ import static org.hamcrest.Matchers.*;
  * intentionally distinct from the production 5701 so the in-process member cannot accidentally
  * join a locally-running production cluster).</p>
  *
- * <p>Test cases mirror {@link dev.sbs.minecraftapi.model.JpaModelTest} from {@code minecraft-api}
+ * <p>Test cases mirror {@link dev.sbs.skyblockdata.model.JpaModelTest} from {@code minecraft-api}
  * to exercise the production SkyBlock JSON model corpus end to end against real Hazelcast.</p>
  *
  * <p>Phase 2d (lazy streaming JpaRepository rewrite) re-enables this test. The Phase 2a
@@ -53,18 +53,17 @@ public class JpaModelHazelcastTest {
 
     @BeforeAll
     static void beforeAll() {
-        // Connect the SkyBlock H2 in-memory session backed by the in-process Hazelcast member.
-        // Referencing MinecraftApi triggers its static initializer (registers SkyBlockFactory in
-        // the service manager) without auto-connecting any session; this explicit call is the
-        // sole connect site for the test JVM.
-        MinecraftApi.connectSkyBlockSession(JpaCacheProvider.HAZELCAST_EMBEDDED);
+        // Connect the SkyBlock H2 in-memory session backed by the in-process Hazelcast member
+        // via the skyblock-data-api locator. GsonSettings.defaults() walks the ServiceLoader
+        // SPI to pick up SkyBlock-specific type adapters from every *-api jar on the classpath.
+        SkyBlockData.connect(JpaCacheProvider.HAZELCAST_EMBEDDED, dev.simplified.gson.GsonSettings.defaults());
     }
 
     @AfterAll
     static void afterAll() {
         // Symmetric cleanup: shut down the SessionManager so the in-process Hazelcast member
         // and its JpaSession are released. Leaves the JVM clean for any sibling test class.
-        MinecraftApi.getSessionManager().shutdown();
+        SkyBlockData.getSessionManager().shutdown();
     }
 
     // ---------------------------------------------------------------
@@ -74,7 +73,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void region_loadsFromJson() {
-        Repository<Region> repo = MinecraftApi.getRepository(Region.class);
+        Repository<Region> repo = SkyBlockData.getRepository(Region.class);
         ConcurrentList<Region> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -88,7 +87,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void statCategory_loadsFromJson() {
-        Repository<StatCategory> repo = MinecraftApi.getRepository(StatCategory.class);
+        Repository<StatCategory> repo = SkyBlockData.getRepository(StatCategory.class);
         ConcurrentList<StatCategory> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -100,7 +99,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void mobType_loadsFromJson() {
-        Repository<MobType> repo = MinecraftApi.getRepository(MobType.class);
+        Repository<MobType> repo = SkyBlockData.getRepository(MobType.class);
         ConcurrentList<MobType> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -112,7 +111,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void itemCategory_loadsFromJson() {
-        Repository<ItemCategory> repo = MinecraftApi.getRepository(ItemCategory.class);
+        Repository<ItemCategory> repo = SkyBlockData.getRepository(ItemCategory.class);
         ConcurrentList<ItemCategory> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -120,7 +119,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void essence_loadsFromJson() {
-        Repository<Essence> repo = MinecraftApi.getRepository(Essence.class);
+        Repository<Essence> repo = SkyBlockData.getRepository(Essence.class);
         ConcurrentList<Essence> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -128,7 +127,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void keyword_loadsFromJson() {
-        Repository<Keyword> repo = MinecraftApi.getRepository(Keyword.class);
+        Repository<Keyword> repo = SkyBlockData.getRepository(Keyword.class);
         ConcurrentList<Keyword> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -136,7 +135,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void melodySong_loadsFromJson() {
-        Repository<MelodySong> repo = MinecraftApi.getRepository(MelodySong.class);
+        Repository<MelodySong> repo = SkyBlockData.getRepository(MelodySong.class);
         ConcurrentList<MelodySong> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -144,7 +143,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void zodiacEvent_loadsFromJson() {
-        Repository<ZodiacEvent> repo = MinecraftApi.getRepository(ZodiacEvent.class);
+        Repository<ZodiacEvent> repo = SkyBlockData.getRepository(ZodiacEvent.class);
         ConcurrentList<ZodiacEvent> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -152,7 +151,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void power_loadsFromJson() {
-        Repository<Power> repo = MinecraftApi.getRepository(Power.class);
+        Repository<Power> repo = SkyBlockData.getRepository(Power.class);
         ConcurrentList<Power> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -160,7 +159,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void potionGroup_loadsFromJson() {
-        Repository<PotionGroup> repo = MinecraftApi.getRepository(PotionGroup.class);
+        Repository<PotionGroup> repo = SkyBlockData.getRepository(PotionGroup.class);
         ConcurrentList<PotionGroup> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -168,7 +167,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void bitsItem_loadsFromJson() {
-        Repository<BitsItem> repo = MinecraftApi.getRepository(BitsItem.class);
+        Repository<BitsItem> repo = SkyBlockData.getRepository(BitsItem.class);
         ConcurrentList<BitsItem> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -176,7 +175,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void mayor_loadsFromJson() {
-        Repository<Mayor> repo = MinecraftApi.getRepository(Mayor.class);
+        Repository<Mayor> repo = SkyBlockData.getRepository(Mayor.class);
         ConcurrentList<Mayor> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -184,7 +183,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void skill_loadsFromJson() {
-        Repository<Skill> repo = MinecraftApi.getRepository(Skill.class);
+        Repository<Skill> repo = SkyBlockData.getRepository(Skill.class);
         ConcurrentList<Skill> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -192,7 +191,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void collection_loadsFromJson() {
-        Repository<Collection> repo = MinecraftApi.getRepository(Collection.class);
+        Repository<Collection> repo = SkyBlockData.getRepository(Collection.class);
         ConcurrentList<Collection> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -200,7 +199,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void potion_loadsFromJson() {
-        Repository<Potion> repo = MinecraftApi.getRepository(Potion.class);
+        Repository<Potion> repo = SkyBlockData.getRepository(Potion.class);
         ConcurrentList<Potion> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -208,7 +207,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(1)
     void brew_loadsFromJson() {
-        Repository<Brew> repo = MinecraftApi.getRepository(Brew.class);
+        Repository<Brew> repo = SkyBlockData.getRepository(Brew.class);
         ConcurrentList<Brew> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -220,7 +219,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(2)
     void stat_loadsFromJson_withCategoryFk() {
-        Repository<Stat> repo = MinecraftApi.getRepository(Stat.class);
+        Repository<Stat> repo = SkyBlockData.getRepository(Stat.class);
         ConcurrentList<Stat> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -235,7 +234,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(2)
     void zone_loadsFromJson_withRegionFk() {
-        Repository<Zone> repo = MinecraftApi.getRepository(Zone.class);
+        Repository<Zone> repo = SkyBlockData.getRepository(Zone.class);
         ConcurrentList<Zone> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -249,7 +248,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(2)
     void item_loadsFromJson_withCategoryFk() {
-        Repository<Item> repo = MinecraftApi.getRepository(Item.class);
+        Repository<Item> repo = SkyBlockData.getRepository(Item.class);
         ConcurrentList<Item> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -261,7 +260,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(2)
     void gemstone_loadsFromJson_withStatFk() {
-        Repository<Gemstone> repo = MinecraftApi.getRepository(Gemstone.class);
+        Repository<Gemstone> repo = SkyBlockData.getRepository(Gemstone.class);
         ConcurrentList<Gemstone> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -274,7 +273,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(2)
     void bestiaryCategory_loadsFromJson() {
-        Repository<BestiaryCategory> repo = MinecraftApi.getRepository(BestiaryCategory.class);
+        Repository<BestiaryCategory> repo = SkyBlockData.getRepository(BestiaryCategory.class);
         ConcurrentList<BestiaryCategory> all = repo.findAll();
         assertThat(all, not(empty()));
     }
@@ -282,7 +281,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(2)
     void bestiarySubcategory_loadsFromJson_withCategoryFk() {
-        Repository<BestiarySubcategory> repo = MinecraftApi.getRepository(BestiarySubcategory.class);
+        Repository<BestiarySubcategory> repo = SkyBlockData.getRepository(BestiarySubcategory.class);
         ConcurrentList<BestiarySubcategory> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -294,7 +293,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(2)
     void pet_loadsFromJson_withSkillFk() {
-        Repository<Pet> repo = MinecraftApi.getRepository(Pet.class);
+        Repository<Pet> repo = SkyBlockData.getRepository(Pet.class);
         ConcurrentList<Pet> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -307,7 +306,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(2)
     void slayer_loadsFromJson_withMobTypeFk() {
-        Repository<Slayer> repo = MinecraftApi.getRepository(Slayer.class);
+        Repository<Slayer> repo = SkyBlockData.getRepository(Slayer.class);
         ConcurrentList<Slayer> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -320,7 +319,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(2)
     void fairySoul_loadsFromJson() {
-        Repository<FairySoul> repo = MinecraftApi.getRepository(FairySoul.class);
+        Repository<FairySoul> repo = SkyBlockData.getRepository(FairySoul.class);
         ConcurrentList<FairySoul> all = repo.findAll();
         assertThat(all, notNullValue()); // JSON file is currently empty
     }
@@ -328,7 +327,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(2)
     void minion_loadsFromJson_withCollectionFk() {
-        Repository<Minion> repo = MinecraftApi.getRepository(Minion.class);
+        Repository<Minion> repo = SkyBlockData.getRepository(Minion.class);
         ConcurrentList<Minion> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -340,7 +339,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(2)
     void shopPerk_loadsFromJson_withRegionsForeignIds() {
-        Repository<ShopPerk> repo = MinecraftApi.getRepository(ShopPerk.class);
+        Repository<ShopPerk> repo = SkyBlockData.getRepository(ShopPerk.class);
         ConcurrentList<ShopPerk> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -358,7 +357,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(3)
     void accessory_loadsFromJson_withItemFk() {
-        Repository<Accessory> repo = MinecraftApi.getRepository(Accessory.class);
+        Repository<Accessory> repo = SkyBlockData.getRepository(Accessory.class);
         ConcurrentList<Accessory> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -371,7 +370,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(3)
     void enchantment_loadsFromJson_withForeignIds() {
-        Repository<Enchantment> repo = MinecraftApi.getRepository(Enchantment.class);
+        Repository<Enchantment> repo = SkyBlockData.getRepository(Enchantment.class);
         ConcurrentList<Enchantment> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -396,7 +395,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(3)
     void reforge_loadsFromJson_withForeignIds() {
-        Repository<Reforge> repo = MinecraftApi.getRepository(Reforge.class);
+        Repository<Reforge> repo = SkyBlockData.getRepository(Reforge.class);
         ConcurrentList<Reforge> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -417,7 +416,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(3)
     void mixin_loadsFromJson_withFkAndForeignIds() {
-        Repository<Mixin> repo = MinecraftApi.getRepository(Mixin.class);
+        Repository<Mixin> repo = SkyBlockData.getRepository(Mixin.class);
         ConcurrentList<Mixin> all = repo.findAll();
         assertThat(all, not(empty()));
 
@@ -434,7 +433,7 @@ public class JpaModelHazelcastTest {
     @Test
     @Order(3)
     void bestiaryFamily_loadsFromJson_withFkAndForeignIds() {
-        Repository<BestiaryFamily> repo = MinecraftApi.getRepository(BestiaryFamily.class);
+        Repository<BestiaryFamily> repo = SkyBlockData.getRepository(BestiaryFamily.class);
         ConcurrentList<BestiaryFamily> all = repo.findAll();
         assertThat(all, not(empty()));
 

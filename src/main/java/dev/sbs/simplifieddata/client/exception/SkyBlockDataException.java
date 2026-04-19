@@ -1,6 +1,6 @@
 package dev.sbs.simplifieddata.client.exception;
 
-import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.simplifieddata.DataApi;
 import dev.simplified.client.exception.ApiException;
 import lombok.Getter;
 import org.jetbrains.annotations.NotNull;
@@ -15,7 +15,7 @@ import java.util.Optional;
  * {@link dev.simplified.client.response.Response} so the full HTTP context (status, headers,
  * body, network details, original request) is available on the exception instance. On top of
  * that the Phase 4b subclass parses the response body into a {@link GitHubErrorResponse} via
- * the shared {@link MinecraftApi#getGson()} instance so callers can reach the GitHub
+ * the shared {@link DataApi#getGson()} instance so callers can reach the GitHub
  * {@code message} and {@code documentation_url} fields without re-parsing.
  *
  * <p>Three helpers disambiguate the common 403/429 confusion surface on the GitHub API:
@@ -61,7 +61,7 @@ public final class SkyBlockDataException extends ApiException {
     public SkyBlockDataException(@NotNull String methodKey, @NotNull feign.Response response) {
         super(methodKey, response, "SkyBlockData");
         this.githubResponse = this.getBody()
-            .map(json -> Optional.ofNullable(super.fromJson(MinecraftApi.getGson(), json, GitHubErrorResponse.class))
+            .map(json -> Optional.ofNullable(super.fromJson(DataApi.getGson(), json, GitHubErrorResponse.class))
                 .orElseGet(GitHubErrorResponse::unknown))
             .orElseGet(GitHubErrorResponse::unknown);
     }

@@ -1,7 +1,7 @@
 package dev.sbs.simplifieddata.poller;
 
 import com.google.gson.Gson;
-import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.simplifieddata.DataApi;
 import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
@@ -79,7 +79,7 @@ import static org.hamcrest.Matchers.nullValue;
 @Tag("slow")
 class AssetPollerTest {
 
-    private static final @NotNull Gson GSON = MinecraftApi.getGson();
+    private static final @NotNull Gson GSON = DataApi.getGson();
 
     private SessionManager sessionManager;
     private JpaSession assetSession;
@@ -245,7 +245,7 @@ class AssetPollerTest {
         assertThat(this.refreshTrigger.invocations, hasSize(1));
         assertThat(
             this.refreshTrigger.invocations.get(0),
-            contains(dev.sbs.minecraftapi.persistence.model.Item.class)
+            contains(dev.sbs.skyblockdata.model.Item.class)
         );
     }
 
@@ -277,7 +277,7 @@ class AssetPollerTest {
         this.contract.commit = firstCommit;
         this.contract.fileContents.put(
             "data/v1/index.json",
-            manifestWithModelClass("sha-one", "dev.sbs.minecraftapi.persistence.model.Item", "com.example.GhostModel")
+            manifestWithModelClass("sha-one", "dev.sbs.skyblockdata.model.Item", "com.example.GhostModel")
         );
         this.accessor.next = response(200, Map.of("etag", List.of("W/\"etag-one\"")), firstCommit);
 
@@ -295,7 +295,7 @@ class AssetPollerTest {
             "data/v1/index.json",
             manifestWithModelClassAndHashes(
                 "sha-two",
-                "dev.sbs.minecraftapi.persistence.model.Item", "ccc",
+                "dev.sbs.skyblockdata.model.Item", "ccc",
                 "com.example.GhostModel", "ddd"
             )
         );
@@ -307,7 +307,7 @@ class AssetPollerTest {
         // Only the resolvable FQCN makes it through; the ghost is logged and skipped.
         assertThat(
             this.refreshTrigger.lastTargets(),
-            contains(dev.sbs.minecraftapi.persistence.model.Item.class)
+            contains(dev.sbs.skyblockdata.model.Item.class)
         );
     }
 
@@ -427,7 +427,7 @@ class AssetPollerTest {
                   "path": "data/v1/items/items.json",
                   "category": "items",
                   "table_name": "item",
-                  "model_class": "dev.sbs.minecraftapi.persistence.model.Item",
+                  "model_class": "dev.sbs.skyblockdata.model.Item",
                   "content_sha256": "%s",
                   "bytes": 10,
                   "has_extra": false
@@ -436,7 +436,7 @@ class AssetPollerTest {
                   "path": "data/v1/mobs/mobs.json",
                   "category": "mobs",
                   "table_name": "mob",
-                  "model_class": "dev.sbs.minecraftapi.persistence.model.MobType",
+                  "model_class": "dev.sbs.skyblockdata.model.MobType",
                   "content_sha256": "%s",
                   "bytes": 20,
                   "has_extra": false

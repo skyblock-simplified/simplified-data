@@ -2,8 +2,8 @@ package dev.sbs.simplifieddata.write;
 
 import com.hazelcast.collection.IQueue;
 import com.hazelcast.core.HazelcastInstance;
-import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.minecraftapi.persistence.model.ZodiacEvent;
+import dev.sbs.simplifieddata.DataApi;
+import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.simplified.persistence.source.WriteRequest;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -191,7 +191,7 @@ public class SmokeWriteSentinel {
         setField(sentinel, "id", SENTINEL_ID);
         setField(sentinel, "name", sentinelName);
         setField(sentinel, "releaseYear", SENTINEL_RELEASE_YEAR);
-        return WriteRequest.upsert(ZodiacEvent.class, sentinel, MinecraftApi.getGson(), "skyblock-data");
+        return WriteRequest.upsert(ZodiacEvent.class, sentinel, DataApi.getGson(), "skyblock-data");
     }
 
     private @NotNull WriteRequest buildDeleteRequest() {
@@ -202,7 +202,7 @@ public class SmokeWriteSentinel {
         setField(sentinel, "id", SENTINEL_ID);
         setField(sentinel, "name", SENTINEL_NAME_PREFIX + " (cleanup)");
         setField(sentinel, "releaseYear", SENTINEL_RELEASE_YEAR);
-        return WriteRequest.delete(ZodiacEvent.class, sentinel, MinecraftApi.getGson(), "skyblock-data");
+        return WriteRequest.delete(ZodiacEvent.class, sentinel, DataApi.getGson(), "skyblock-data");
     }
 
     private void enqueue(@NotNull WriteRequest request) throws InterruptedException {

@@ -58,9 +58,14 @@ dependencies {
     // indirectly through the JCache SPI which is why runtimeOnly was sufficient.
     implementation(libs.hazelcast)
 
-    // Projects
-    implementation("dev.sbs:minecraft-api:0.1.0")
-    testImplementation("dev.sbs:asset-renderer:0.1.0")
+    // Simplified infrastructure (formerly transitive via minecraft-api)
+    implementation("com.github.simplified-dev:client:master-SNAPSHOT")
+    implementation("com.github.simplified-dev:gson-extras:master-SNAPSHOT")
+
+    // Split minecraft-api modules - simplified-data only consumes the persistence API.
+    // SkyBlockData, SkyBlockFactory, the 43 JPA entities, and minecraft-text (transitively
+    // via api()) all flow in from this single dep.
+    implementation("com.github.skyblock-simplified:skyblock-data-api:master-SNAPSHOT")
 }
 
 tasks {

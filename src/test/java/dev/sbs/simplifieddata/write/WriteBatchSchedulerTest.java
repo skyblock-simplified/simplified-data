@@ -1,7 +1,7 @@
 package dev.sbs.simplifieddata.write;
 
-import dev.sbs.minecraftapi.MinecraftApi;
-import dev.sbs.minecraftapi.persistence.model.ZodiacEvent;
+import dev.sbs.simplifieddata.DataApi;
+import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.PutContentRequest;
@@ -377,7 +377,7 @@ class WriteBatchSchedulerTest {
                 () -> { throw new UnsupportedOperationException(); },
                 path -> { throw new UnsupportedOperationException(); },
                 new ThrowingContract(),
-                MinecraftApi.getGson(),
+                DataApi.getGson(),
                 java.nio.file.Path.of("target/stub-overlay-does-not-exist"),
                 3,
                 new WriteMetrics(new SimpleMeterRegistry())
@@ -392,13 +392,13 @@ class WriteBatchSchedulerTest {
     }
 
     /**
-     * {@link dev.sbs.minecraftapi.persistence.SkyBlockFactory} whose
+     * {@link dev.sbs.skyblockdata.SkyBlockFactory} whose
      * {@code getModels()} returns an empty list so {@link RemoteSkyBlockFactory}'s
      * constructor does not try to wire a source per real SkyBlock entity
      * (which would fail because the stubbed index provider + file fetcher +
      * write contract throw on every invocation).
      */
-    private static final class EmptySkyBlockFactory extends dev.sbs.minecraftapi.persistence.SkyBlockFactory {
+    private static final class EmptySkyBlockFactory extends dev.sbs.skyblockdata.SkyBlockFactory {
 
         @Override
         public @NotNull ConcurrentList<Class<JpaModel>> getModels() {
@@ -424,7 +424,7 @@ class WriteBatchSchedulerTest {
                 new ThrowingContract(),
                 new ThrowingFileFetcher(),
                 new EmptyIndexProvider(),
-                MinecraftApi.getGson(),
+                DataApi.getGson(),
                 "stub-" + modelClass.getSimpleName(),
                 modelClass,
                 3,
@@ -471,7 +471,7 @@ class WriteBatchSchedulerTest {
                 new ThrowingContract(),
                 new ThrowingFileFetcher(),
                 new EmptyIndexProvider(),
-                MinecraftApi.getGson(),
+                DataApi.getGson(),
                 "staging-" + modelClass.getSimpleName(),
                 modelClass,
                 3,

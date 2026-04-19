@@ -1,7 +1,7 @@
 package dev.sbs.simplifieddata.client;
 
 import com.google.gson.Gson;
-import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.simplifieddata.DataApi;
 import dev.sbs.simplifieddata.client.request.CreateBlobRequest;
 import dev.sbs.simplifieddata.client.request.CreateCommitRequest;
 import dev.sbs.simplifieddata.client.request.CreateTreeRequest;
@@ -37,7 +37,7 @@ import static org.hamcrest.Matchers.nullValue;
  */
 class GitDataDtoRoundTripTest {
 
-    private static final @NotNull Gson GSON = MinecraftApi.getGson();
+    private static final @NotNull Gson GSON = DataApi.getGson();
 
     @Test
     @DisplayName("GitRef deserializes a branch ref with embedded object details")

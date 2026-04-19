@@ -2,7 +2,7 @@ package dev.sbs.simplifieddata.write;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
-import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.simplifieddata.DataApi;
 import dev.sbs.simplifieddata.config.GitHubConfig;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.persistence.WritableRemoteJsonSource;
@@ -144,7 +144,7 @@ public class WriteBatchScheduler {
         ConcurrentMap<Class<? extends JpaModel>, WritableRemoteJsonSource<?>> sources = this.factory.getWritableSources();
         BatchCommitRequest.Builder builder = BatchCommitRequest.builder();
 
-        Gson gson = MinecraftApi.getGson();
+        Gson gson = DataApi.getGson();
 
         // Phase A: stage every source into the merged request.
         for (Map.Entry<Class<? extends JpaModel>, WritableRemoteJsonSource<?>> entry : sources.entrySet()) {
@@ -390,13 +390,13 @@ public class WriteBatchScheduler {
             case UPSERT -> WriteRequest.upsert(
                 (Class) type,
                 (JpaModel) mutation.getEntity(),
-                MinecraftApi.getGson(),
+                DataApi.getGson(),
                 GitHubConfig.SOURCE_ID
             );
             case DELETE -> WriteRequest.delete(
                 (Class) type,
                 (JpaModel) mutation.getEntity(),
-                MinecraftApi.getGson(),
+                DataApi.getGson(),
                 GitHubConfig.SOURCE_ID
             );
         };

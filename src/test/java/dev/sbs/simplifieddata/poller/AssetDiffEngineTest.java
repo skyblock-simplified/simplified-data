@@ -1,7 +1,7 @@
 package dev.sbs.simplifieddata.poller;
 
 import com.google.gson.Gson;
-import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.simplifieddata.DataApi;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.asset.ExternalAssetEntryState;
@@ -20,13 +20,13 @@ import static org.hamcrest.Matchers.is;
  * Unit tests for {@link AssetDiffEngine}.
  *
  * <p>Hand-crafts {@link ManifestIndex} and {@link ExternalAssetEntryState} fixtures via the
- * shared {@link MinecraftApi#getGson()} instance and asserts the three output lists on
+ * shared {@code DataApi.getGson()} instance and asserts the three output lists on
  * every classification combination. No Spring, no database - the engine is a pure function
  * and the tests run in a fraction of a millisecond each.
  */
 class AssetDiffEngineTest {
 
-    private static final @NotNull Gson GSON = MinecraftApi.getGson();
+    private static final @NotNull Gson GSON = DataApi.getGson();
 
     @Test
     @DisplayName("empty manifest against empty state yields empty diff")

@@ -1,7 +1,7 @@
 package dev.sbs.simplifieddata.client;
 
 import com.google.gson.Gson;
-import dev.sbs.minecraftapi.MinecraftApi;
+import dev.sbs.simplifieddata.DataApi;
 import dev.sbs.simplifieddata.client.request.PutContentRequest;
 import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
 import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
@@ -27,7 +27,7 @@ import static org.hamcrest.Matchers.nullValue;
  */
 class ContentsApiDtoRoundTripTest {
 
-    private static final @NotNull Gson GSON = MinecraftApi.getGson();
+    private static final @NotNull Gson GSON = DataApi.getGson();
 
     @Test
     @DisplayName("GitHubContentEnvelope deserializes all declared fields from a narrowed envelope fixture")

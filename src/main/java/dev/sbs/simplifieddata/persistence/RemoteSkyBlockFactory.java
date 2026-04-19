@@ -1,7 +1,7 @@
 package dev.sbs.simplifieddata.persistence;
 
 import com.google.gson.Gson;
-import dev.sbs.minecraftapi.persistence.SkyBlockFactory;
+import dev.sbs.skyblockdata.SkyBlockFactory;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.write.WriteMetrics;
 import dev.simplified.collection.Concurrent;
