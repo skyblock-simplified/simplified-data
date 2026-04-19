@@ -60,7 +60,7 @@ dependencies {
 
     // Projects
     implementation("dev.sbs:minecraft-api:0.1.0")
-    testImplementation("dev.sbs:minecraft-renderer:0.1.0")
+    testImplementation("dev.sbs:asset-renderer:0.1.0")
 }
 
 tasks {
