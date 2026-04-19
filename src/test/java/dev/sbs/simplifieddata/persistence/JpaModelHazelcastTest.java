@@ -2,7 +2,7 @@ package dev.sbs.simplifieddata.persistence;
 
 import dev.sbs.minecraftapi.MinecraftApi;
 import dev.sbs.minecraftapi.persistence.model.*;
-import dev.sbs.renderer.text.ChatColor;
+import lib.minecraft.text.ChatColor;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.JpaCacheProvider;
 import dev.simplified.persistence.Repository;
