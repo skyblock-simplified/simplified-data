@@ -2,9 +2,9 @@ package dev.sbs.simplifieddata.poller;
 
 import com.google.gson.Gson;
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.simplifieddata.client.SkyBlockDataContract;
-import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
-import dev.sbs.simplifieddata.client.response.GitHubCommit;
+import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
+import api.simplified.github.exception.GitHubApiException;
+import api.simplified.github.response.GitHubCommit;
 import dev.sbs.simplifieddata.config.GitHubConfig;
 import dev.simplified.client.exception.NotModifiedException;
 import dev.simplified.client.response.Response;
@@ -65,7 +65,7 @@ import java.util.stream.Collectors;
  * Both entry points forward to the private {@link #doPoll(String)} method so there is one
  * implementation of the cycle.
  *
- * <p>Graceful degradation is load-bearing. A GitHub error ({@link SkyBlockDataException})
+ * <p>Graceful degradation is load-bearing. A GitHub error ({@link GitHubApiException})
  * is logged at {@code WARN} with the rate-limit disambiguation helpers; a persistence
  * failure ({@link JpaException}) is logged at {@code ERROR}. Either case leaves the service
  * running so the next cycle can retry. The poller never throws out of {@link #doPoll(String)}.
@@ -274,7 +274,7 @@ public class AssetPoller {
             } else {
                 this.triggerRefresh(diff);
             }
-        } catch (SkyBlockDataException ex) {
+        } catch (GitHubApiException ex) {
             log.warn(
                 "AssetPoller source='{}' - GitHub call failed (HTTP {}): {} (primaryRateLimit={}, secondaryRateLimit={}, permissions={})",
                 this.sourceId,

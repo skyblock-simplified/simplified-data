@@ -2,11 +2,11 @@ package dev.sbs.simplifieddata.persistence;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
-import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
-import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
-import dev.sbs.simplifieddata.client.request.PutContentRequest;
-import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
-import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
+import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
+import api.simplified.github.exception.GitHubApiException;
+import api.simplified.github.request.PutContentRequest;
+import api.simplified.github.response.GitHubContentEnvelope;
+import api.simplified.github.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.write.BufferedMutation;
 import dev.sbs.simplifieddata.write.StagedBatch;
 import dev.sbs.simplifieddata.write.WriteMetrics;
@@ -90,7 +90,7 @@ import java.util.Objects;
  * is ever parallelized, a {@code ReentrantLock} should be added.
  *
  * @param <T> the entity type this source writes
- * @see SkyBlockDataWriteContract
+ * @see SkyBlockDataContract
  * @see BufferedMutation
  * @see WriteRequest.Operation
  */
@@ -109,12 +109,12 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
     private final @NotNull Source<T> delegate;
 
     /** The Phase 6b GitHub write-path contract (Contents API JSON media type). */
-    private final @NotNull SkyBlockDataWriteContract writeContract;
+    private final @NotNull SkyBlockDataContract writeContract;
 
     /**
      * The Phase 4b file fetcher used by the Phase 6b.1 Git Data API staging
      * path to read current file content directly (bypassing the base64
-     * envelope limit that caps {@link SkyBlockDataWriteContract#getFileMetadata(String)}
+     * envelope limit that caps {@link SkyBlockDataContract#getFileMetadata(String)}
      * at 1 MB). Uses the raw media type and handles files up to the 100 MB
      * Contents API ceiling.
      */
@@ -178,7 +178,7 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
      */
     public WritableRemoteJsonSource(
         @NotNull Source<T> delegate,
-        @NotNull SkyBlockDataWriteContract writeContract,
+        @NotNull SkyBlockDataContract writeContract,
         @NotNull FileFetcher fileFetcher,
         @NotNull IndexProvider indexProvider,
         @NotNull Gson gson,
@@ -207,7 +207,7 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
      */
     public WritableRemoteJsonSource(
         @NotNull Source<T> delegate,
-        @NotNull SkyBlockDataWriteContract writeContract,
+        @NotNull SkyBlockDataContract writeContract,
         @NotNull FileFetcher fileFetcher,
         @NotNull IndexProvider indexProvider,
         @NotNull Gson gson,
@@ -317,7 +317,7 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
      *       and find the manifest entry whose {@code modelClass} equals this
      *       source's entity FQCN.</li>
      *   <li>GET the current envelope via
-     *       {@link SkyBlockDataWriteContract#getFileMetadata(String)} to read
+     *       {@link SkyBlockDataContract#getFileMetadata(String)} to read
      *       the current blob SHA + the current file content.</li>
      *   <li>Decode the current content (base64 or raw UTF-8 depending on size)
      *       into a {@code ConcurrentList<T>} via Gson.</li>
@@ -616,7 +616,7 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
      * Internal commit loop: resolve path, fetch envelope, decode body, apply
      * mutations, PUT, retry on 412.
      */
-    private @NotNull CommitBatchResult commitSnapshot(@NotNull ConcurrentMap<String, BufferedMutation<T>> snapshot) throws JpaException, SkyBlockDataException {
+    private @NotNull CommitBatchResult commitSnapshot(@NotNull ConcurrentMap<String, BufferedMutation<T>> snapshot) throws JpaException, GitHubApiException {
         String filePath = this.resolveTargetPath();
 
         int attempt = 0;
@@ -627,7 +627,7 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
 
             try {
                 envelope = this.writeContract.getFileMetadata(filePath);
-            } catch (SkyBlockDataException ex) {
+            } catch (GitHubApiException ex) {
                 throw new JpaException(ex, "Failed to fetch metadata for '%s' from source '%s'", filePath, this.sourceId);
             }
 
@@ -660,7 +660,7 @@ public class WritableRemoteJsonSource<T extends JpaModel> implements MutableSour
                     "412 Precondition Failed on PUT '{}' for source '{}' (attempt {}/{}) - refetching blob SHA",
                     filePath, this.sourceId, attempt, this.max412ImmediateRetries
                 );
-            } catch (SkyBlockDataException ex) {
+            } catch (GitHubApiException ex) {
                 throw new JpaException(
                     ex,
                     "Failed to PUT '%s' on source '%s' (HTTP %d)",

@@ -1,14 +1,14 @@
 package dev.sbs.simplifieddata.write;
 
-import dev.sbs.simplifieddata.client.SkyBlockGitDataContract;
-import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
-import dev.sbs.simplifieddata.client.request.CreateBlobRequest;
-import dev.sbs.simplifieddata.client.request.CreateCommitRequest;
-import dev.sbs.simplifieddata.client.request.CreateTreeRequest;
-import dev.sbs.simplifieddata.client.request.UpdateRefRequest;
-import dev.sbs.simplifieddata.client.response.GitBlob;
-import dev.sbs.simplifieddata.client.response.GitCommit;
-import dev.sbs.simplifieddata.client.response.GitRef;
+import dev.sbs.skyblockdata.contract.SkyBlockGitDataContract;
+import api.simplified.github.exception.GitHubApiException;
+import api.simplified.github.request.CreateBlobRequest;
+import api.simplified.github.request.CreateCommitRequest;
+import api.simplified.github.request.CreateTreeRequest;
+import api.simplified.github.request.UpdateRefRequest;
+import api.simplified.github.response.GitBlob;
+import api.simplified.github.response.GitCommit;
+import api.simplified.github.response.GitRef;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import lombok.extern.log4j.Log4j2;
@@ -43,7 +43,7 @@ import java.util.Map;
  * </ol>
  *
  * <p>Retry policy (Q4 locked answer): up to 3 immediate retries from step 1
- * if any step raises a {@link SkyBlockDataException} with HTTP status in the
+ * if any step raises a {@link GitHubApiException} with HTTP status in the
  * retryable set (409 Conflict, 422 Unprocessable Entity - the typical
  * symptoms of a concurrent writer landing a competing commit during our
  * flow). After 3 retries are exhausted, the service returns a
@@ -123,7 +123,7 @@ public class GitDataCommitService {
                     request.getTotalMutationCount(), request.getDirtyFileCount(), commitSha, attempt
                 );
                 return GitDataCommitResult.success(commitSha);
-            } catch (SkyBlockDataException ex) {
+            } catch (GitHubApiException ex) {
                 lastCause = ex;
                 int status = ex.getStatus().getCode();
 
@@ -165,7 +165,7 @@ public class GitDataCommitService {
      * non-2xx response; the caller's retry loop decides whether to retry
      * based on the exception's HTTP status.
      */
-    private @NotNull String runFlow(@NotNull BatchCommitRequest request) throws SkyBlockDataException {
+    private @NotNull String runFlow(@NotNull BatchCommitRequest request) throws GitHubApiException {
         // Step 1: get the current ref tip.
         io.micrometer.core.instrument.Timer.Sample getRefSample = this.metrics.recordGitDataStepStart();
         GitRef currentRef = this.contract.getRef(TARGET_BRANCH);
@@ -266,7 +266,7 @@ public class GitDataCommitService {
     }
 
     /**
-     * Determines whether a {@link SkyBlockDataException} HTTP status should
+     * Determines whether a {@link GitHubApiException} HTTP status should
      * trigger an immediate retry from step 1. {@code 409 Conflict} and
      * {@code 422 Unprocessable Entity} are the two statuses a concurrent
      * writer can produce mid-flow; all other statuses escalate to the

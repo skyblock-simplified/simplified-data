@@ -1,59 +1,60 @@
 package dev.sbs.simplifieddata.config;
 
+import api.simplified.github.GitHubAuth;
+import api.simplified.github.GitHubContentsContract;
+import api.simplified.github.GitHubContentsWriteContract;
+import api.simplified.github.exception.GitHubApiException;
 import com.google.gson.Gson;
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.simplifieddata.client.SkyBlockDataContract;
-import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
-import dev.sbs.simplifieddata.client.SkyBlockGitDataContract;
-import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
-import dev.sbs.simplifieddata.client.request.PutContentRequest;
-import dev.sbs.simplifieddata.source.GitHubFileFetcher;
-import dev.sbs.simplifieddata.source.GitHubIndexProvider;
+import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
+import dev.sbs.skyblockdata.contract.SkyBlockDataService;
+import dev.sbs.skyblockdata.contract.SkyBlockGitDataContract;
+import dev.sbs.skyblockdata.source.GitHubFileFetcher;
+import dev.sbs.skyblockdata.source.GitHubIndexProvider;
 import dev.simplified.client.Client;
 import dev.simplified.client.ClientConfig;
 import dev.simplified.persistence.source.FileFetcher;
 import dev.simplified.persistence.source.IndexProvider;
 import lombok.extern.log4j.Log4j2;
 import org.jetbrains.annotations.NotNull;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Optional;
-import java.util.function.Supplier;
-
 /**
- * Wires the GitHub-backed {@code skyblock-data} client and Phase 4a source bridge beans into
- * the {@code simplified-data} Spring context.
+ * Wires the GitHub-backed {@code skyblock-data} clients and source bridge beans into the
+ * {@code simplified-data} Spring context.
  *
  * <p>The PAT is read from the {@code SKYBLOCK_DATA_GITHUB_TOKEN} environment variable via the
  * Spring property placeholder {@code skyblock.data.github.token}. A missing or blank value
- * degrades the client to unauthenticated mode (60 req/hr per IP) and logs a warning rather
+ * degrades the clients to unauthenticated mode (60 req/hr per IP) and logs a warning rather
  * than failing the context refresh - public repo reads still succeed, which lets dev
  * environments boot without provisioning a token. Production deployments should always set
  * the variable for the 5000 req/hr authenticated budget.
  *
- * <p>Bean graph:
+ * <p>Three Feign clients are built because the surfaces have distinct {@code Accept} headers:
  * <ul>
- *   <li>{@code skyBlockDataAuthorizationSupplier} - Spring-injected supplier of the
- *       {@code Authorization} header value, resolved once per outbound request via the
- *       {@link dev.simplified.client.Client} dynamic-header pipeline.</li>
- *   <li>{@code skyBlockDataClient} - the {@link Client} wrapping the
- *       {@link SkyBlockDataContract} proxy.</li>
- *   <li>{@code gitHubIndexProvider} - the Phase 4a {@link IndexProvider} bridge.</li>
- *   <li>{@code gitHubFileFetcher} - the Phase 4a {@link FileFetcher} bridge.</li>
+ *   <li>Read client - {@link GitHubContentsContract} with {@code application/vnd.github.raw+json}
+ *       so the Contents endpoint returns raw file bodies for files above 1 MB.</li>
+ *   <li>Write client - {@link GitHubContentsWriteContract} with {@code application/vnd.github+json}
+ *       so the Contents {@code GET} returns the JSON envelope (with the blob SHA needed as the
+ *       optimistic-concurrency token) and the {@code PUT} accepts a JSON body.</li>
+ *   <li>Git Data client - {@link SkyBlockGitDataContract} (a SkyBlock-pre-bound façade over
+ *       {@link api.simplified.github.GitHubGitDataContract}) with the JSON {@code Accept}
+ *       header. The Git Data API surface drives the multi-file batched commit path.</li>
  * </ul>
  *
- * <p>Phase 5.5.1 note - {@code If-None-Match} conditional requests are handled automatically
- * by the {@code dev.simplified.client} library. {@code InternalRequestInterceptor} attaches
- * the header on every {@code GET} / {@code HEAD} when a matching cached response exists in
- * {@link Client#getResponseCache()}, and {@code InternalResponseInterceptor} transparently
- * serves the cached body on {@code 304} by synthesizing a fresh response envelope with
- * {@link dev.simplified.client.response.HttpStatus#NOT_MODIFIED} as the wire-truth status.
- * Callers only see a {@link dev.simplified.client.exception.NotModifiedException} on the
- * rare cache-miss revalidation path (client restart, TTL prune, streaming endpoint). No
- * explicit {@code If-None-Match} supplier is needed here - the framework does it.
+ * <p>Two SkyBlock-shaped data façades are exposed for evaluation:
+ * <ul>
+ *   <li>{@link SkyBlockDataContract} - sub-interface façade aggregating the read and write
+ *       proxies behind one type. Source adapters depend on this.</li>
+ *   <li>{@link SkyBlockDataService} - service-class façade with the same surface as a final
+ *       class. Available alongside the interface variant so each call site can be evaluated
+ *       against both ergonomics; the unused variant will be deleted after evaluation.</li>
+ * </ul>
+ *
+ * <p>{@code If-None-Match} is handled automatically by the
+ * {@code dev.simplified.client.interceptor.InternalRequestInterceptor} auto-attach path.
  *
  * <p>None of these beans issue any network I/O at construction. The {@link Client} wrapper
  * builds the Feign proxy and Apache HttpClient connection pool lazily on the first contract
@@ -64,36 +65,32 @@ import java.util.function.Supplier;
 @Log4j2
 public class GitHubConfig {
 
-    /** The human-readable source id used in exception messages and Phase 4c's asset state. */
+    /** The human-readable source id used in exception messages and asset state. */
     public static final @NotNull String SOURCE_ID = "skyblock-data";
 
-    /** The GitHub REST API version header value locked by the research pack. */
+    /** The GitHub REST API version header value. */
     private static final @NotNull String GITHUB_API_VERSION = "2022-11-28";
 
     /** The {@code Accept} media type required by the Contents endpoint for files above 1 MB. */
     private static final @NotNull String GITHUB_RAW_ACCEPT = "application/vnd.github.raw+json";
 
     /**
-     * The default GitHub JSON media type used by the Phase 6b write-path client. Returns the
-     * JSON envelope from {@code GET /contents/{path}} (with the blob {@code sha} field needed
-     * as the optimistic-concurrency token for {@code PUT}) rather than the raw file body.
+     * The default GitHub JSON media type used by the write-path and Git Data clients. Returns
+     * the JSON envelope from {@code GET /contents/{path}} (with the blob {@code sha} field
+     * needed as the optimistic-concurrency token for {@code PUT}) rather than the raw file body.
      */
     private static final @NotNull String GITHUB_JSON_ACCEPT = "application/vnd.github+json";
 
     /**
-     * Builds the dynamic supplier of the {@code Authorization} header value from the
-     * Spring-resolved PAT property.
-     *
-     * <p>A blank or missing token returns {@link Optional#empty()} on every invocation so the
-     * framework's request interceptor omits the header entirely, leaving the client in
-     * unauthenticated mode. A non-blank token returns {@code Bearer <token>} verbatim.
+     * Builds the {@link GitHubAuth} supplier from the Spring-resolved PAT property. A blank or
+     * missing token degrades the clients to unauthenticated mode.
      *
      * @param token the PAT resolved from {@code skyblock.data.github.token} / the
      *              {@code SKYBLOCK_DATA_GITHUB_TOKEN} env var; may be empty
-     * @return the dynamic-header supplier
+     * @return the dynamic {@code Authorization} header supplier
      */
     @Bean
-    public @NotNull Supplier<Optional<String>> skyBlockDataAuthorizationSupplier(
+    public @NotNull GitHubAuth gitHubAuth(
         @Value("${skyblock.data.github.token:}") @NotNull String token
     ) {
         if (token.isBlank()) {
@@ -102,180 +99,130 @@ public class GitHubConfig {
                     + "access (60 req/hr per IP). Set the environment variable for the 5000 req/hr "
                     + "authenticated budget."
             );
-            return Optional::empty;
+        } else {
+            log.info(
+                "SKYBLOCK_DATA_GITHUB_TOKEN loaded (length={}) - GitHub clients will use "
+                    + "authenticated requests (5000 req/hr budget)",
+                token.length()
+            );
         }
-
-        String headerValue = "Bearer " + token;
-        log.info(
-            "SKYBLOCK_DATA_GITHUB_TOKEN loaded (length={}) - GitHub client will use "
-                + "authenticated requests (5000 req/hr budget)",
-            token.length()
-        );
-        return () -> Optional.of(headerValue);
+        return GitHubAuth.bearer(token);
     }
 
     /**
-     * Builds the {@link Client} for the {@link SkyBlockDataContract}.
+     * Builds the read-side {@link Client} for {@link GitHubContentsContract}. Pinned to the
+     * raw {@code Accept} media type so the Contents endpoint returns raw file bodies.
      *
-     * <p>Wires three headers:
-     * <ul>
-     *   <li>{@code Accept} (static) - pinned to {@code application/vnd.github.raw+json} so the
-     *       Contents endpoint returns raw file bodies for files above 1 MB. The Commits
-     *       endpoint accepts this media type as a no-op alias for its standard JSON.</li>
-     *   <li>{@code X-GitHub-Api-Version} (static) - pinned to {@code 2022-11-28}.</li>
-     *   <li>{@code Authorization} (dynamic) - sourced from
-     *       {@code skyBlockDataAuthorizationSupplier}.</li>
-     * </ul>
-     *
-     * <p>{@code If-None-Match} is handled automatically by the
-     * {@code dev.simplified.client.interceptor.InternalRequestInterceptor} auto-attach path
-     * introduced in the Phase 5.5.1 client-library update - see the class-level Javadoc.
-     * No explicit header wiring is required here.
-     *
-     * <p>The error decoder maps every non-2xx response to a {@link SkyBlockDataException},
-     * matching the {@code HypixelApiException} / {@code SbsApiException} /
-     * {@code MojangApiException} pattern in {@code minecraft-api}.
-     *
-     * <p>The Gson instance is obtained from {@link DataApi#getGson()} so the client
-     * reuses the {@code ConcurrentList} type adapter, the {@code JpaExclusionStrategy}, and
-     * the SkyBlock type adapters. Creating a fresh {@code new Gson()} here would break
-     * {@code ConcurrentList<GitHubCommit>} deserialization on the commit response.
-     *
-     * @param skyBlockDataAuthorizationSupplier the dynamic {@code Authorization} supplier
-     * @return the fully constructed client wrapper; no network I/O performed during build
+     * @param gitHubAuth the dynamic {@code Authorization} supplier
+     * @return the read-path client wrapper
      */
     @Bean
-    public @NotNull Client<SkyBlockDataContract> skyBlockDataClient(
-        @Qualifier("skyBlockDataAuthorizationSupplier") @NotNull Supplier<Optional<String>> skyBlockDataAuthorizationSupplier
-    ) {
+    public @NotNull Client<GitHubContentsContract> gitHubContentsClient(@NotNull GitHubAuth gitHubAuth) {
         Gson gson = DataApi.getGson();
-
-        ClientConfig<SkyBlockDataContract> options = ClientConfig.builder(SkyBlockDataContract.class, gson)
+        ClientConfig<GitHubContentsContract> options = ClientConfig.builder(GitHubContentsContract.class, gson)
             .withHeader("Accept", GITHUB_RAW_ACCEPT)
             .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
-            .withDynamicHeader("Authorization", skyBlockDataAuthorizationSupplier)
+            .withDynamicHeader("Authorization", gitHubAuth)
             .withErrorDecoder((methodKey, response) -> {
-                throw new SkyBlockDataException(methodKey, response);
+                throw new GitHubApiException(methodKey, response, gson);
             })
             .build();
 
-        log.info("Building SkyBlockDataContract client against api.github.com");
+        log.info("Building GitHubContentsContract client against api.github.com (Accept: {})", GITHUB_RAW_ACCEPT);
         return Client.create(options);
     }
 
     /**
-     * Builds the Phase 6b write-path {@link Client} for
-     * {@link SkyBlockDataWriteContract}.
+     * Builds the write-side {@link Client} for {@link GitHubContentsWriteContract}. Pinned to
+     * the JSON {@code Accept} media type so the Contents endpoint returns the JSON envelope
+     * with the blob SHA used as the optimistic-concurrency token.
      *
-     * <p>Structurally identical to {@link #skyBlockDataClient} except for the static
-     * {@code Accept} header: the write-path client requests
-     * {@code application/vnd.github+json} so the Contents API {@code GET} endpoint
-     * returns the JSON envelope (including the blob {@code sha} field) and the
-     * {@code PUT} endpoint accepts a standard JSON body. Merging the write path
-     * onto the existing read-path client would attach two {@code Accept} headers
-     * to every request ({@code Client.buildInternalClient()} adds static client
-     * headers via {@code request.addHeader(...)}, which is additive rather than
-     * replacing), producing brittle content-negotiation behavior.
-     *
-     * <p>Shares the same {@code skyBlockDataAuthorizationSupplier} bean with the
-     * read-path client so a single PAT resolves both contracts' auth. The
-     * {@code If-None-Match} auto-attach pipeline introduced in Phase 5.5.1 is
-     * inherited transparently - the framework's
-     * {@code InternalRequestInterceptor} auto-attaches the header on every
-     * {@code GET} on this client as well.
-     *
-     * <p>{@code If-None-Match} is not auto-attached on the write client's
-     * {@code PUT} calls because
-     * {@code InternalRequestInterceptor.attachIfNoneMatch} restricts itself to
-     * {@code GET}/{@code HEAD} methods - mutating calls never get surprise
-     * optimistic-concurrency enforcement via the auto-attach path. The Phase 6b
-     * retry path manages its own blob SHA explicitly through the
-     * {@link PutContentRequest#getSha()} field of the body.
-     *
-     * @param skyBlockDataAuthorizationSupplier the dynamic {@code Authorization} supplier,
-     *                                          shared with the read-path client
+     * @param gitHubAuth the dynamic {@code Authorization} supplier, shared with the read client
      * @return the write-path client wrapper
      */
     @Bean
-    public @NotNull Client<SkyBlockDataWriteContract> skyBlockDataWriteClient(
-        @Qualifier("skyBlockDataAuthorizationSupplier") @NotNull Supplier<Optional<String>> skyBlockDataAuthorizationSupplier
-    ) {
+    public @NotNull Client<GitHubContentsWriteContract> gitHubContentsWriteClient(@NotNull GitHubAuth gitHubAuth) {
         Gson gson = DataApi.getGson();
-
-        ClientConfig<SkyBlockDataWriteContract> options = ClientConfig.builder(SkyBlockDataWriteContract.class, gson)
+        ClientConfig<GitHubContentsWriteContract> options = ClientConfig.builder(GitHubContentsWriteContract.class, gson)
             .withHeader("Accept", GITHUB_JSON_ACCEPT)
             .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
-            .withDynamicHeader("Authorization", skyBlockDataAuthorizationSupplier)
+            .withDynamicHeader("Authorization", gitHubAuth)
             .withErrorDecoder((methodKey, response) -> {
-                throw new SkyBlockDataException(methodKey, response);
+                throw new GitHubApiException(methodKey, response, gson);
             })
             .build();
 
-        log.info("Building SkyBlockDataWriteContract client against api.github.com (Accept: {})", GITHUB_JSON_ACCEPT);
+        log.info("Building GitHubContentsWriteContract client against api.github.com (Accept: {})", GITHUB_JSON_ACCEPT);
         return Client.create(options);
     }
 
     /**
-     * Unwraps the Phase 6b write-path client's contract proxy as a standalone bean so
-     * that {@code WritableRemoteJsonSource} and the Phase 6b write-path beans do not
-     * need to depend on the {@code final} {@link Client} type directly. Matches the
-     * {@code skyBlockDataContract} pattern on {@link dev.sbs.simplifieddata.config.PersistenceConfig}.
+     * Aggregates the read and write proxies into the {@link SkyBlockDataContract} façade. This
+     * is variant A of the SkyBlock-shaped surface: a Feign sub-interface with default methods
+     * pre-binding owner/repo. Source adapters depend on this bean.
      *
-     * @param skyBlockDataWriteClient the write-path client wrapper
-     * @return the unwrapped {@link SkyBlockDataWriteContract} proxy
+     * @param gitHubContentsClient the read-side proxy
+     * @param gitHubContentsWriteClient the write-side proxy
+     * @return the aggregated {@code SkyBlockDataContract} instance
      */
     @Bean
-    public @NotNull SkyBlockDataWriteContract skyBlockDataWriteContract(
-        @NotNull Client<SkyBlockDataWriteContract> skyBlockDataWriteClient
+    public @NotNull SkyBlockDataContract skyBlockDataContract(
+        @NotNull Client<GitHubContentsContract> gitHubContentsClient,
+        @NotNull Client<GitHubContentsWriteContract> gitHubContentsWriteClient
     ) {
-        return skyBlockDataWriteClient.getContract();
+        return SkyBlockDataContract.from(
+            gitHubContentsClient.getContract(),
+            gitHubContentsWriteClient.getContract()
+        );
     }
 
     /**
-     * Builds the dormant Phase 6b {@link Client} for
-     * {@link SkyBlockGitDataContract} - the extractable Git Data API surface.
+     * Wires variant B of the SkyBlock-shaped surface for evaluation against variant A. Both
+     * variants delegate to the same underlying read and write proxies; pick whichever
+     * ergonomics fit better at the call site after evaluation.
      *
-     * <p>Structurally identical to {@link #skyBlockDataWriteClient} (same
-     * {@code Accept: application/vnd.github+json}, same API version header,
-     * same auth supplier) because the Git Data API accepts the same JSON
-     * media type and the same PAT. No production code path reads or writes
-     * through this client in Phase 6b - it is shipped purely as an
-     * extractable API surface for future initiatives (Phase 6e multi-file
-     * commit coalescing; downstream project extraction).
+     * @param gitHubContentsClient the read-side proxy
+     * @param gitHubContentsWriteClient the write-side proxy
+     * @return the service-class façade
+     */
+    @Bean
+    public @NotNull SkyBlockDataService skyBlockDataService(
+        @NotNull Client<GitHubContentsContract> gitHubContentsClient,
+        @NotNull Client<GitHubContentsWriteContract> gitHubContentsWriteClient
+    ) {
+        return new SkyBlockDataService(
+            gitHubContentsClient.getContract(),
+            gitHubContentsWriteClient.getContract()
+        );
+    }
+
+    /**
+     * Builds the {@link Client} for {@link SkyBlockGitDataContract} - the SkyBlock-pre-bound
+     * Git Data API façade. Single Feign client; the Git Data API uses one {@code Accept} so
+     * no aggregation is required.
      *
-     * <p>The bean is eagerly constructed at context refresh so the Feign
-     * proxy validation runs at boot: any broken {@code @RequestLine}
-     * template on {@link SkyBlockGitDataContract} fails fast rather than
-     * surfacing at first use. Network I/O still does not happen until a
-     * contract method is invoked.
-     *
-     * @param skyBlockDataAuthorizationSupplier the dynamic {@code Authorization} supplier,
-     *                                          shared with both other GitHub clients
+     * @param gitHubAuth the dynamic {@code Authorization} supplier, shared with the other clients
      * @return the Git Data API client wrapper
      */
     @Bean
-    public @NotNull Client<SkyBlockGitDataContract> skyBlockGitDataClient(
-        @Qualifier("skyBlockDataAuthorizationSupplier") @NotNull Supplier<Optional<String>> skyBlockDataAuthorizationSupplier
-    ) {
+    public @NotNull Client<SkyBlockGitDataContract> skyBlockGitDataClient(@NotNull GitHubAuth gitHubAuth) {
         Gson gson = DataApi.getGson();
-
         ClientConfig<SkyBlockGitDataContract> options = ClientConfig.builder(SkyBlockGitDataContract.class, gson)
             .withHeader("Accept", GITHUB_JSON_ACCEPT)
             .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
-            .withDynamicHeader("Authorization", skyBlockDataAuthorizationSupplier)
+            .withDynamicHeader("Authorization", gitHubAuth)
             .withErrorDecoder((methodKey, response) -> {
-                throw new SkyBlockDataException(methodKey, response);
+                throw new GitHubApiException(methodKey, response, gson);
             })
             .build();
 
-        log.info("Building SkyBlockGitDataContract client against api.github.com (dormant write surface)");
+        log.info("Building SkyBlockGitDataContract client against api.github.com (Accept: {})", GITHUB_JSON_ACCEPT);
         return Client.create(options);
     }
 
     /**
-     * Unwraps the dormant Git Data client's contract proxy as a standalone
-     * bean. Matches the {@code skyBlockDataContract} / {@code skyBlockDataWriteContract}
-     * pattern.
+     * Unwraps the Git Data client's contract proxy as a standalone bean for direct injection
+     * into the write-path orchestrator.
      *
      * @param skyBlockGitDataClient the Git Data API client wrapper
      * @return the unwrapped {@link SkyBlockGitDataContract} proxy
@@ -290,23 +237,23 @@ public class GitHubConfig {
     /**
      * Registers the {@link GitHubIndexProvider} bridge bean.
      *
-     * @param skyBlockDataClient the GitHub client wrapper
-     * @return a Phase 4a {@link IndexProvider} backed by the GitHub Contents API
+     * @param skyBlockDataContract the SkyBlock-pre-bound data contract
+     * @return an {@link IndexProvider} backed by the GitHub Contents API
      */
     @Bean
-    public @NotNull IndexProvider gitHubIndexProvider(@NotNull Client<SkyBlockDataContract> skyBlockDataClient) {
-        return new GitHubIndexProvider(SOURCE_ID, skyBlockDataClient.getContract(), DataApi.getGson());
+    public @NotNull IndexProvider gitHubIndexProvider(@NotNull SkyBlockDataContract skyBlockDataContract) {
+        return new GitHubIndexProvider(SOURCE_ID, skyBlockDataContract, DataApi.getGson());
     }
 
     /**
      * Registers the {@link GitHubFileFetcher} bridge bean.
      *
-     * @param skyBlockDataClient the GitHub client wrapper
-     * @return a Phase 4a {@link FileFetcher} backed by the GitHub Contents API
+     * @param skyBlockDataContract the SkyBlock-pre-bound data contract
+     * @return a {@link FileFetcher} backed by the GitHub Contents API
      */
     @Bean
-    public @NotNull FileFetcher gitHubFileFetcher(@NotNull Client<SkyBlockDataContract> skyBlockDataClient) {
-        return new GitHubFileFetcher(SOURCE_ID, skyBlockDataClient.getContract());
+    public @NotNull FileFetcher gitHubFileFetcher(@NotNull SkyBlockDataContract skyBlockDataContract) {
+        return new GitHubFileFetcher(SOURCE_ID, skyBlockDataContract);
     }
 
 }

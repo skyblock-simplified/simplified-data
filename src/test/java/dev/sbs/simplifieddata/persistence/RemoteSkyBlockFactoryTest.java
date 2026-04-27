@@ -2,11 +2,11 @@ package dev.sbs.simplifieddata.persistence;
 
 import com.google.gson.Gson;
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
-import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
-import dev.sbs.simplifieddata.client.request.PutContentRequest;
-import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
-import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
+import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
+import api.simplified.github.exception.GitHubApiException;
+import api.simplified.github.request.PutContentRequest;
+import api.simplified.github.response.GitHubContentEnvelope;
+import api.simplified.github.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.write.WriteMetrics;
 import dev.sbs.skyblockdata.SkyBlockFactory;
 import dev.sbs.skyblockdata.model.Accessory;
@@ -53,15 +53,25 @@ final class RemoteSkyBlockFactoryTest {
     };
 
     /** Write contract stub that throws on every method - construction never calls GitHub. */
-    private static final @NotNull SkyBlockDataWriteContract THROWING_WRITE = new SkyBlockDataWriteContract() {
+    private static final @NotNull SkyBlockDataContract THROWING_WRITE = new SkyBlockDataContract() {
 
         @Override
-        public @NotNull GitHubContentEnvelope getFileMetadata(@NotNull String path) throws SkyBlockDataException {
+        public api.simplified.github.response.@NotNull GitHubCommit getLatestMasterCommit(@NotNull String owner, @NotNull String repo) throws GitHubApiException {
             throw new IllegalStateException("write contract stub should not be invoked during wiring");
         }
 
         @Override
-        public @NotNull GitHubPutResponse putFileContent(@NotNull String path, @NotNull PutContentRequest body) throws SkyBlockDataException {
+        public byte @NotNull [] getFileContent(@NotNull String owner, @NotNull String repo, @NotNull String path) throws GitHubApiException {
+            throw new IllegalStateException("write contract stub should not be invoked during wiring");
+        }
+
+        @Override
+        public @NotNull GitHubContentEnvelope getFileMetadata(@NotNull String owner, @NotNull String repo, @NotNull String path) throws GitHubApiException {
+            throw new IllegalStateException("write contract stub should not be invoked during wiring");
+        }
+
+        @Override
+        public @NotNull GitHubPutResponse putFileContent(@NotNull String owner, @NotNull String repo, @NotNull String path, @NotNull PutContentRequest body) throws GitHubApiException {
             throw new IllegalStateException("write contract stub should not be invoked during wiring");
         }
 

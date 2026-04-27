@@ -2,16 +2,16 @@ package dev.sbs.simplifieddata.write;
 
 import com.google.gson.Gson;
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.simplifieddata.client.SkyBlockGitDataContract;
-import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
-import dev.sbs.simplifieddata.client.request.CreateBlobRequest;
-import dev.sbs.simplifieddata.client.request.CreateCommitRequest;
-import dev.sbs.simplifieddata.client.request.CreateTreeRequest;
-import dev.sbs.simplifieddata.client.request.UpdateRefRequest;
-import dev.sbs.simplifieddata.client.response.GitBlob;
-import dev.sbs.simplifieddata.client.response.GitCommit;
-import dev.sbs.simplifieddata.client.response.GitRef;
-import dev.sbs.simplifieddata.client.response.GitTree;
+import dev.sbs.skyblockdata.contract.SkyBlockGitDataContract;
+import api.simplified.github.exception.GitHubApiException;
+import api.simplified.github.request.CreateBlobRequest;
+import api.simplified.github.request.CreateCommitRequest;
+import api.simplified.github.request.CreateTreeRequest;
+import api.simplified.github.request.UpdateRefRequest;
+import api.simplified.github.response.GitBlob;
+import api.simplified.github.response.GitCommit;
+import api.simplified.github.response.GitRef;
+import api.simplified.github.response.GitTree;
 import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
@@ -179,7 +179,7 @@ class GitDataCommitServiceTest {
         GitDataCommitResult result = service.commit(request);
 
         assertThat(result.isSuccess(), is(false));
-        assertThat(result.getFailureCause(), instanceOfOrNull(SkyBlockDataException.class));
+        assertThat(result.getFailureCause(), instanceOfOrNull(GitHubApiException.class));
         assertThat(this.contract.updateRefCalls, hasSize(4));
     }
 
@@ -288,7 +288,7 @@ class GitDataCommitServiceTest {
         }
 
         @Override
-        public @NotNull GitRef getRef(@NotNull String branch) {
+        public @NotNull GitRef getRef(@NotNull String owner, @NotNull String repo, @NotNull String branch) {
             this.getRefCalls.incrementAndGet();
             String json = """
                 {
@@ -305,7 +305,7 @@ class GitDataCommitServiceTest {
         }
 
         @Override
-        public @NotNull GitCommit getCommit(@NotNull String sha) {
+        public @NotNull GitCommit getCommit(@NotNull String owner, @NotNull String repo, @NotNull String sha) {
             this.getCommitCalls.incrementAndGet();
             String json = """
                 {
@@ -319,12 +319,12 @@ class GitDataCommitServiceTest {
         }
 
         @Override
-        public @NotNull GitTree getTree(@NotNull String sha, @NotNull String recursive) {
+        public @NotNull GitTree getTree(@NotNull String owner, @NotNull String repo, @NotNull String sha, @NotNull String recursive) {
             throw new UnsupportedOperationException("getTree stub not used by commit flow");
         }
 
         @Override
-        public @NotNull GitBlob createBlob(@NotNull CreateBlobRequest body) throws SkyBlockDataException {
+        public @NotNull GitBlob createBlob(@NotNull String owner, @NotNull String repo, @NotNull CreateBlobRequest body) throws GitHubApiException {
             this.createBlobCalls.add(body);
 
             if (this.blobOutcomeQueued && !this.queuedBlobs.isEmpty()) {
@@ -343,7 +343,7 @@ class GitDataCommitServiceTest {
         }
 
         @Override
-        public @NotNull GitTree createTree(@NotNull CreateTreeRequest body) {
+        public @NotNull GitTree createTree(@NotNull String owner, @NotNull String repo, @NotNull CreateTreeRequest body) {
             this.createTreeCalls.add(body);
             String json = """
                 {
@@ -356,7 +356,7 @@ class GitDataCommitServiceTest {
         }
 
         @Override
-        public @NotNull GitCommit createCommit(@NotNull CreateCommitRequest body) {
+        public @NotNull GitCommit createCommit(@NotNull String owner, @NotNull String repo, @NotNull CreateCommitRequest body) {
             this.createCommitCalls.add(body);
             String json = """
                 {
@@ -370,7 +370,7 @@ class GitDataCommitServiceTest {
         }
 
         @Override
-        public @NotNull GitRef updateRef(@NotNull String branch, @NotNull UpdateRefRequest body) throws SkyBlockDataException {
+        public @NotNull GitRef updateRef(@NotNull String owner, @NotNull String repo, @NotNull String branch, @NotNull UpdateRefRequest body) throws GitHubApiException {
             this.updateRefCalls.add(body);
 
             if (!this.queuedUpdateRefs.isEmpty()) {
@@ -389,7 +389,7 @@ class GitDataCommitServiceTest {
             return GSON.fromJson(json, GitRef.class);
         }
 
-        private static @NotNull SkyBlockDataException fakeException(int status, @NotNull String reason) {
+        private static @NotNull GitHubApiException fakeException(int status, @NotNull String reason) {
             feign.Request request = feign.Request.create(
                 feign.Request.HttpMethod.POST,
                 "https://api.github.com/fake",
@@ -404,7 +404,7 @@ class GitDataCommitServiceTest {
                 .headers(java.util.Map.of())
                 .body("{\"message\":\"" + reason + "\",\"documentation_url\":\"\"}", StandardCharsets.UTF_8)
                 .build();
-            return new SkyBlockDataException("POST /fake", response);
+            return new GitHubApiException("POST /fake", response, GSON);
         }
 
     }

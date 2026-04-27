@@ -65,7 +65,7 @@ dependencies {
     // Split minecraft-api modules - simplified-data only consumes the persistence API.
     // SkyBlockData, SkyBlockFactory, the 43 JPA entities, and minecraft-text (transitively
     // via api()) all flow in from this single dep.
-    implementation("com.github.skyblock-simplified:skyblock-data-api:master-SNAPSHOT")
+    implementation("com.github.simplified-api:skyblock-data:master-SNAPSHOT")
 }
 
 tasks {

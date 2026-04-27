@@ -1,11 +1,11 @@
 package dev.sbs.simplifieddata.write;
 
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
-import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
-import dev.sbs.simplifieddata.client.request.PutContentRequest;
-import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
-import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
+import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
+import api.simplified.github.exception.GitHubApiException;
+import api.simplified.github.request.PutContentRequest;
+import api.simplified.github.response.GitHubContentEnvelope;
+import api.simplified.github.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.persistence.WritableRemoteJsonSource;
 import dev.sbs.skyblockdata.model.ZodiacEvent;
@@ -563,22 +563,32 @@ class WriteBatchSchedulerTest {
 
     }
 
-    private static final class ThrowingContract implements SkyBlockDataWriteContract {
+    private static final class ThrowingContract implements SkyBlockDataContract {
 
         @Override
-        public @NotNull GitHubContentEnvelope getFileMetadata(@NotNull String path) throws SkyBlockDataException {
+        public api.simplified.github.response.@NotNull GitHubCommit getLatestMasterCommit(@NotNull String owner, @NotNull String repo) throws GitHubApiException {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public @NotNull GitHubPutResponse putFileContent(@NotNull String path, @NotNull PutContentRequest body) throws SkyBlockDataException {
+        public byte @NotNull [] getFileContent(@NotNull String owner, @NotNull String repo, @NotNull String path) throws GitHubApiException {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public @NotNull GitHubContentEnvelope getFileMetadata(@NotNull String owner, @NotNull String repo, @NotNull String path) throws GitHubApiException {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public @NotNull GitHubPutResponse putFileContent(@NotNull String owner, @NotNull String repo, @NotNull String path, @NotNull PutContentRequest body) throws GitHubApiException {
             throw new UnsupportedOperationException();
         }
 
     }
 
     /**
-     * Minimal {@link dev.sbs.simplifieddata.client.SkyBlockGitDataContract}
+     * Minimal {@link dev.sbs.skyblockdata.contract.SkyBlockGitDataContract}
      * stub that throws on every method. Only used by the
      * {@link #stubGitDataService()} helper to satisfy the
      * {@link GitDataCommitService} constructor parameter in legacy
@@ -586,40 +596,40 @@ class WriteBatchSchedulerTest {
      * {@link GitDataCommitService} subclass override intercepts all
      * {@link GitDataCommitService#commit} calls.
      */
-    private static final class SkyBlockGitDataContractStub implements dev.sbs.simplifieddata.client.SkyBlockGitDataContract {
+    private static final class SkyBlockGitDataContractStub implements dev.sbs.skyblockdata.contract.SkyBlockGitDataContract {
 
         @Override
-        public dev.sbs.simplifieddata.client.response.@NotNull GitRef getRef(@NotNull String branch) {
+        public api.simplified.github.response.@NotNull GitRef getRef(@NotNull String owner, @NotNull String repo, @NotNull String branch) {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public dev.sbs.simplifieddata.client.response.@NotNull GitCommit getCommit(@NotNull String sha) {
+        public api.simplified.github.response.@NotNull GitCommit getCommit(@NotNull String owner, @NotNull String repo, @NotNull String sha) {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public dev.sbs.simplifieddata.client.response.@NotNull GitTree getTree(@NotNull String sha, @NotNull String recursive) {
+        public api.simplified.github.response.@NotNull GitTree getTree(@NotNull String owner, @NotNull String repo, @NotNull String sha, @NotNull String recursive) {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public dev.sbs.simplifieddata.client.response.@NotNull GitBlob createBlob(dev.sbs.simplifieddata.client.request.@NotNull CreateBlobRequest body) {
+        public api.simplified.github.response.@NotNull GitBlob createBlob(@NotNull String owner, @NotNull String repo, api.simplified.github.request.@NotNull CreateBlobRequest body) {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public dev.sbs.simplifieddata.client.response.@NotNull GitTree createTree(dev.sbs.simplifieddata.client.request.@NotNull CreateTreeRequest body) {
+        public api.simplified.github.response.@NotNull GitTree createTree(@NotNull String owner, @NotNull String repo, api.simplified.github.request.@NotNull CreateTreeRequest body) {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public dev.sbs.simplifieddata.client.response.@NotNull GitCommit createCommit(dev.sbs.simplifieddata.client.request.@NotNull CreateCommitRequest body) {
+        public api.simplified.github.response.@NotNull GitCommit createCommit(@NotNull String owner, @NotNull String repo, api.simplified.github.request.@NotNull CreateCommitRequest body) {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public dev.sbs.simplifieddata.client.response.@NotNull GitRef updateRef(@NotNull String branch, dev.sbs.simplifieddata.client.request.@NotNull UpdateRefRequest body) {
+        public api.simplified.github.response.@NotNull GitRef updateRef(@NotNull String owner, @NotNull String repo, @NotNull String branch, api.simplified.github.request.@NotNull UpdateRefRequest body) {
             throw new UnsupportedOperationException();
         }
 

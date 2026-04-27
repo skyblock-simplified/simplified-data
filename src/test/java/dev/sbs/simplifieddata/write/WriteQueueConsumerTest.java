@@ -8,11 +8,11 @@ import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
-import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
-import dev.sbs.simplifieddata.client.request.PutContentRequest;
-import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
-import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
+import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
+import api.simplified.github.exception.GitHubApiException;
+import api.simplified.github.request.PutContentRequest;
+import api.simplified.github.response.GitHubContentEnvelope;
+import api.simplified.github.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.persistence.WritableRemoteJsonSource;
 import dev.sbs.skyblockdata.model.ZodiacEvent;
@@ -359,15 +359,25 @@ class WriteQueueConsumerTest {
 
     }
 
-    private static final class ThrowingContract implements SkyBlockDataWriteContract {
+    private static final class ThrowingContract implements SkyBlockDataContract {
 
         @Override
-        public @NotNull GitHubContentEnvelope getFileMetadata(@NotNull String path) throws SkyBlockDataException {
+        public api.simplified.github.response.@NotNull GitHubCommit getLatestMasterCommit(@NotNull String owner, @NotNull String repo) throws GitHubApiException {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public @NotNull GitHubPutResponse putFileContent(@NotNull String path, @NotNull PutContentRequest body) throws SkyBlockDataException {
+        public byte @NotNull [] getFileContent(@NotNull String owner, @NotNull String repo, @NotNull String path) throws GitHubApiException {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public @NotNull GitHubContentEnvelope getFileMetadata(@NotNull String owner, @NotNull String repo, @NotNull String path) throws GitHubApiException {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public @NotNull GitHubPutResponse putFileContent(@NotNull String owner, @NotNull String repo, @NotNull String path, @NotNull PutContentRequest body) throws GitHubApiException {
             throw new UnsupportedOperationException();
         }
 

@@ -4,8 +4,8 @@ import com.hazelcast.client.HazelcastClient;
 import com.hazelcast.core.HazelcastInstance;
 import dev.sbs.simplifieddata.DataApi;
 import dev.sbs.skyblockdata.SkyBlockFactory;
-import dev.sbs.simplifieddata.client.SkyBlockDataContract;
-import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
+import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
+import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.poller.LastResponseAccessor;
 import dev.sbs.simplifieddata.poller.RefreshTrigger;
@@ -115,7 +115,7 @@ public class PersistenceConfig {
     public @NotNull RemoteSkyBlockFactory remoteSkyBlockFactory(
         @NotNull IndexProvider gitHubIndexProvider,
         @NotNull FileFetcher gitHubFileFetcher,
-        @NotNull SkyBlockDataWriteContract skyBlockDataWriteContract,
+        @NotNull SkyBlockDataContract skyBlockDataWriteContract,
         @NotNull WriteMetrics writeMetrics,
         @Value("${skyblock.data.overlay.path:skyblock-data-overlay}") @NotNull String overlayBasePath,
         @Value("${skyblock.data.github.write-412-immediate-retries:3}") int max412ImmediateRetries

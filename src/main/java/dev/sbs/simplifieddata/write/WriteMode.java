@@ -13,7 +13,7 @@ package dev.sbs.simplifieddata.write;
 public enum WriteMode {
 
     /**
-     * Multi-file single-commit via the {@link dev.sbs.simplifieddata.client.SkyBlockGitDataContract
+     * Multi-file single-commit via the {@link dev.sbs.skyblockdata.contract.SkyBlockGitDataContract
      * Git Data API} 7-step flow (ref &rarr; commit &rarr; blob* &rarr; tree &rarr; commit &rarr;
      * ref update). Every file mutated inside a single {@link WriteBatchScheduler} tick lands on
      * {@code skyblock-data/master} in one atomic commit. This is the Phase 6b.1 production
@@ -28,7 +28,7 @@ public enum WriteMode {
     GIT_DATA,
 
     /**
-     * Per-file commits via the {@link dev.sbs.simplifieddata.client.SkyBlockDataWriteContract
+     * Per-file commits via the {@link dev.sbs.skyblockdata.contract.SkyBlockDataContract
      * Contents API}. Every dirty {@link dev.sbs.simplifieddata.persistence.WritableRemoteJsonSource}
      * in a tick produces one commit. Retained as an operational fallback in case the Git Data
      * API path becomes unhealthy or a regression in the 7-step flow blocks writes. This is the

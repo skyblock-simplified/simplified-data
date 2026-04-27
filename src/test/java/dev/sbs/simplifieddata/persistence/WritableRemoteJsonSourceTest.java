@@ -2,11 +2,11 @@ package dev.sbs.simplifieddata.persistence;
 
 import com.google.gson.Gson;
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
-import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
-import dev.sbs.simplifieddata.client.request.PutContentRequest;
-import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
-import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
+import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
+import api.simplified.github.exception.GitHubApiException;
+import api.simplified.github.request.PutContentRequest;
+import api.simplified.github.response.GitHubContentEnvelope;
+import api.simplified.github.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.write.WriteMetrics;
 import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.simplified.client.exception.PreconditionFailedException;
@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Unit tests for {@link WritableRemoteJsonSource} driven against a hand-rolled
- * {@link SkyBlockDataWriteContract} stub and a canned
+ * {@link SkyBlockDataContract} stub and a canned
  * {@link ManifestIndex} fixture.
  *
  * <p>No Spring context, no live Hazelcast, no {@link JpaRepository} - every
@@ -59,7 +59,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  *   <li>412 Precondition Failed retries up to the configured cap with fresh
  *       blob SHA fetches.</li>
  *   <li>Exhausting 412 retries escalates the failures back to the caller.</li>
- *   <li>A non-412 {@link SkyBlockDataException} from {@code putFileContent}
+ *   <li>A non-412 {@link GitHubApiException} from {@code putFileContent}
  *       escalates all mutations to the caller.</li>
  *   <li>{@code load} delegates verbatim to the injected source.</li>
  * </ul>
@@ -211,7 +211,7 @@ class WritableRemoteJsonSourceTest {
     }
 
     @Test
-    @DisplayName("Non-412 SkyBlockDataException from PUT escalates mutations without retrying")
+    @DisplayName("Non-412 GitHubApiException from PUT escalates mutations without retrying")
     void nonPreconditionFailureEscalates() {
         ZodiacEvent existing = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
         this.contract.queueInitialFile(encodeBody(List.of(existing)), INITIAL_BLOB_SHA);
@@ -591,7 +591,7 @@ class WritableRemoteJsonSourceTest {
 
     }
 
-    private static final class StubWriteContract implements SkyBlockDataWriteContract {
+    private static final class StubWriteContract implements SkyBlockDataContract {
 
         enum PutOutcome { SUCCESS, PRECONDITION_FAILED, GENERIC_ERROR }
 
@@ -624,7 +624,7 @@ class WritableRemoteJsonSourceTest {
         }
 
         @Override
-        public @NotNull GitHubContentEnvelope getFileMetadata(@NotNull String path) throws SkyBlockDataException {
+        public @NotNull GitHubContentEnvelope getFileMetadata(@NotNull String owner, @NotNull String repo, @NotNull String path) throws GitHubApiException {
             int idx = this.metadataCallCount.getAndIncrement();
 
             if (idx >= this.queuedBodies.size())
@@ -647,10 +647,22 @@ class WritableRemoteJsonSourceTest {
         }
 
         @Override
+        public api.simplified.github.response.@NotNull GitHubCommit getLatestMasterCommit(@NotNull String owner, @NotNull String repo) throws GitHubApiException {
+            throw new UnsupportedOperationException("WritableRemoteJsonSource does not exercise the read-side commits surface");
+        }
+
+        @Override
+        public byte @NotNull [] getFileContent(@NotNull String owner, @NotNull String repo, @NotNull String path) throws GitHubApiException {
+            throw new UnsupportedOperationException("WritableRemoteJsonSource reads via FileFetcher, not the contract directly");
+        }
+
+        @Override
         public @NotNull GitHubPutResponse putFileContent(
+            @NotNull String owner,
+            @NotNull String repo,
             @NotNull String path,
             @NotNull PutContentRequest body
-        ) throws SkyBlockDataException {
+        ) throws GitHubApiException {
             int idx = this.putCallCount.getAndIncrement();
             this.lastPutBody = body;
 
@@ -670,7 +682,7 @@ class WritableRemoteJsonSourceTest {
                     GitHubPutResponse.class
                 );
                 case PRECONDITION_FAILED -> throw new PreconditionFailedException("PUT /fake", fakeResponse(412, "Precondition Failed"));
-                case GENERIC_ERROR -> throw new SkyBlockDataException("PUT /fake", fakeResponse(500, "Internal Server Error"));
+                case GENERIC_ERROR -> throw new GitHubApiException("PUT /fake", fakeResponse(500, "Internal Server Error"), GSON);
             };
         }
 

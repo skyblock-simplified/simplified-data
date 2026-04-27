@@ -2,9 +2,9 @@ package dev.sbs.simplifieddata.poller;
 
 import com.google.gson.Gson;
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.simplifieddata.client.SkyBlockDataContract;
-import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
-import dev.sbs.simplifieddata.client.response.GitHubCommit;
+import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
+import api.simplified.github.exception.GitHubApiException;
+import api.simplified.github.response.GitHubCommit;
 import dev.simplified.client.exception.NotModifiedException;
 import dev.simplified.client.request.HttpMethod;
 import dev.simplified.client.request.Request;
@@ -63,7 +63,7 @@ import static org.hamcrest.Matchers.*;
  *   <li>Cache-miss {@code 304} revalidation path (the stub throws
  *       {@link NotModifiedException} directly, mimicking the framework's behavior when the
  *       client's recent-response cache has no matching body) records a no-change cycle.</li>
- *   <li>{@link SkyBlockDataException} during the commits call is swallowed without crashing
+ *   <li>{@link GitHubApiException} during the commits call is swallowed without crashing
  *       the poller.</li>
  *   <li>{@code pollEnabled=false} via constructor flag bypasses the scheduled and startup
  *       entry points entirely.</li>
@@ -372,7 +372,7 @@ class AssetPollerTest {
     }
 
     @Test
-    @DisplayName("SkyBlockDataException is swallowed and the poll cycle returns normally")
+    @DisplayName("GitHubApiException is swallowed and the poll cycle returns normally")
     void gitHubFailureIsSwallowed() {
         this.contract.commitException = buildFailure(500, "Internal Server Error");
 
@@ -532,7 +532,7 @@ class AssetPollerTest {
         return new Response.Impl<>(body, details, httpStatus, request, wrappedHeaders);
     }
 
-    private static @NotNull SkyBlockDataException buildFailure(int status, @NotNull String reason) {
+    private static @NotNull GitHubApiException buildFailure(int status, @NotNull String reason) {
         feign.Request feignRequest = feign.Request.create(
             feign.Request.HttpMethod.GET,
             "https://api.github.com/repos/skyblock-simplified/skyblock-data/commits?sha=master",
@@ -547,7 +547,7 @@ class AssetPollerTest {
             .headers(Map.of())
             .body("{\"message\":\"" + reason + "\"}", StandardCharsets.UTF_8)
             .build();
-        return new SkyBlockDataException("getLatestMasterCommit", feignResponse);
+        return new GitHubApiException("getLatestMasterCommit", feignResponse, GSON);
     }
 
     private static @NotNull NotModifiedException buildNotModified() {
@@ -576,7 +576,7 @@ class AssetPollerTest {
         private @Nullable RuntimeException commitException;
 
         @Override
-        public @NotNull GitHubCommit getLatestMasterCommit() throws SkyBlockDataException {
+        public @NotNull GitHubCommit getLatestMasterCommit(@NotNull String owner, @NotNull String repo) throws GitHubApiException {
             if (this.commitException != null)
                 throw this.commitException;
 
@@ -587,13 +587,23 @@ class AssetPollerTest {
         }
 
         @Override
-        public byte @NotNull [] getFileContent(@NotNull String path) throws SkyBlockDataException {
+        public byte @NotNull [] getFileContent(@NotNull String owner, @NotNull String repo, @NotNull String path) throws GitHubApiException {
             String body = this.fileContents.get(path);
 
             if (body == null)
                 throw new IllegalStateException("StubContract.fileContents missing entry for path '" + path + "'");
 
             return body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+        @Override
+        public api.simplified.github.response.@NotNull GitHubContentEnvelope getFileMetadata(@NotNull String owner, @NotNull String repo, @NotNull String path) throws GitHubApiException {
+            throw new UnsupportedOperationException("AssetPoller does not exercise the write surface");
+        }
+
+        @Override
+        public api.simplified.github.response.@NotNull GitHubPutResponse putFileContent(@NotNull String owner, @NotNull String repo, @NotNull String path, api.simplified.github.request.@NotNull PutContentRequest body) throws GitHubApiException {
+            throw new UnsupportedOperationException("AssetPoller does not exercise the write surface");
         }
 
     }

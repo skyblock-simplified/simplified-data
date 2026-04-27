@@ -2,7 +2,7 @@ package dev.sbs.simplifieddata.persistence;
 
 import com.google.gson.Gson;
 import dev.sbs.skyblockdata.SkyBlockFactory;
-import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
+import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
 import dev.sbs.simplifieddata.write.WriteMetrics;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
@@ -34,7 +34,7 @@ import java.util.function.Consumer;
  * constructor eagerly instantiates one source chain per model:
  * {@code WritableRemoteJsonSource(DiskOverlaySource(RemoteJsonSource(...)))}. Reads
  * delegate through the disk overlay layer unchanged; writes bypass the delegate
- * and go direct to GitHub via the injected {@link SkyBlockDataWriteContract}.
+ * and go direct to GitHub via the injected {@link SkyBlockDataContract}.
  *
  * <p>The per-model {@link WritableRemoteJsonSource} instances are stored in both
  * {@link #getSources()} (for Hibernate's repository initialization path) and
@@ -104,7 +104,7 @@ public class RemoteSkyBlockFactory implements RepositoryFactory {
         @NotNull SkyBlockFactory delegate,
         @NotNull IndexProvider indexProvider,
         @NotNull FileFetcher fileFetcher,
-        @NotNull SkyBlockDataWriteContract writeContract,
+        @NotNull SkyBlockDataContract writeContract,
         @NotNull Gson gson,
         @NotNull Path overlayBasePath,
         int max412ImmediateRetries,
@@ -164,7 +164,7 @@ public class RemoteSkyBlockFactory implements RepositoryFactory {
         @NotNull String sourceId,
         @NotNull IndexProvider indexProvider,
         @NotNull FileFetcher fileFetcher,
-        @NotNull SkyBlockDataWriteContract writeContract,
+        @NotNull SkyBlockDataContract writeContract,
         @NotNull Gson gson,
         @NotNull Path overlayBasePath,
         int max412ImmediateRetries,

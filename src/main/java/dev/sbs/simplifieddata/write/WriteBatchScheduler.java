@@ -236,12 +236,12 @@ public class WriteBatchScheduler {
     /**
      * Maps a commit failure's root cause to a bounded
      * {@link WriteMetrics.FailureReason} tag value. Uses the
-     * {@link dev.sbs.simplifieddata.client.exception.SkyBlockDataException}
+     * {@link api.simplified.github.exception.GitHubApiException}
      * status code when available, and falls back to coarse classification
      * (network / other) for everything else.
      */
     private static @NotNull WriteMetrics.FailureReason deriveFailureReason(@Nullable Throwable cause) {
-        if (cause instanceof dev.sbs.simplifieddata.client.exception.SkyBlockDataException ex)
+        if (cause instanceof api.simplified.github.exception.GitHubApiException ex)
             return WriteMetrics.FailureReason.fromStatus(ex.getStatus().getCode());
         if (cause instanceof java.net.SocketException || cause instanceof java.net.UnknownHostException)
             return WriteMetrics.FailureReason.NETWORK;
