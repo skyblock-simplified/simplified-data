@@ -43,7 +43,7 @@ dependencies {
     // /actuator/prometheus scrape endpoint. API key authentication is disabled
     // in application.properties because simplified-data exposes no REST
     // endpoints to protect.
-    implementation("dev.sbs:server-api:0.1.0")
+    implementation("com.github.simplified-dev:spring-framework:master-SNAPSHOT")
 
     // Micrometer Prometheus registry - Phase 6b.3. Version pinned explicitly via
     // the catalog to avoid drift against Spring Boot's managed dependencies
