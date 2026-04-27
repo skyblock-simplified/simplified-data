@@ -1,7 +1,6 @@
 package dev.sbs.simplifieddata.write;
 
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.PutContentRequest;
@@ -9,12 +8,11 @@ import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
 import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.persistence.WritableRemoteJsonSource;
+import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.collection.ConcurrentMap;
 import dev.simplified.persistence.JpaModel;
 import dev.simplified.persistence.JpaRepository;
-import dev.simplified.persistence.exception.JpaException;
 import dev.simplified.persistence.source.IndexProvider;
 import dev.simplified.persistence.source.ManifestIndex;
 import dev.simplified.persistence.source.Source;
@@ -27,16 +25,11 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.empty;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.hasSize;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.*;
 
 /**
  * Unit tests for {@link WriteBatchScheduler} driven against a hand-rolled
@@ -142,10 +135,10 @@ class WriteBatchSchedulerTest {
 
         assertThat(this.consumer.getRetries(), hasSize(1));
         // The next retry must be attempt=3 (2 + 1), not attempt=1.
-        assertThat(this.consumer.getRetries().get(0).getAttempt(), equalTo(3));
+        assertThat(this.consumer.getRetries().getFirst().getAttempt(), equalTo(3));
         // Exponential-backoff readyAt for attempt=3 is now + 1min * 2^(3-1) = now + 4min.
         long nowMillis = Instant.now().toEpochMilli();
-        long diffSeconds = (this.consumer.getRetries().get(0).getReadyAtEpochMillis() - nowMillis) / 1000L;
+        long diffSeconds = (this.consumer.getRetries().getFirst().getReadyAtEpochMillis() - nowMillis) / 1000L;
         assertThat(diffSeconds > 230 && diffSeconds < 250, is(true));
     }
 
@@ -166,7 +159,7 @@ class WriteBatchSchedulerTest {
         assertThat(okSource.commitCount, equalTo(1));
         assertThat(badSource.commitCount, equalTo(1));
         assertThat(this.consumer.getRetries(), hasSize(1));
-        assertThat(this.consumer.getRetries().get(0).getRequest().getEntityClassName(), equalTo(OtherModel.class.getName()));
+        assertThat(this.consumer.getRetries().getFirst().getRequest().getEntityClassName(), equalTo(OtherModel.class.getName()));
     }
 
     @Test
@@ -233,7 +226,7 @@ class WriteBatchSchedulerTest {
         scheduler.tick();
 
         assertThat(capturing.commitCalls, hasSize(1));
-        BatchCommitRequest merged = capturing.commitCalls.get(0);
+        BatchCommitRequest merged = capturing.commitCalls.getFirst();
         assertThat(merged.getDirtyFileCount(), equalTo(2));
         assertThat(merged.getTotalMutationCount(), equalTo(5));
         assertThat(this.consumer.getRetries(), is(empty()));
@@ -317,7 +310,6 @@ class WriteBatchSchedulerTest {
         return new BufferedMutation<>(op, event, UUID.randomUUID(), Instant.now());
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
     private static <T extends JpaModel> @NotNull StagedBatch<T> newStagedBatch(
         @NotNull Class<T> modelClass,
         @NotNull String path,
@@ -336,7 +328,6 @@ class WriteBatchSchedulerTest {
         return new StagedBatch<>(modelClass, fileSnapshots, mutations, mutationCount);
     }
 
-    @SuppressWarnings("unchecked")
     private static <T extends JpaModel> @NotNull T instantiate(@NotNull Class<T> type) {
         try {
             return type.getDeclaredConstructor().newInstance();
@@ -349,10 +340,8 @@ class WriteBatchSchedulerTest {
         return new BufferedMutation<>(WriteRequest.Operation.UPSERT, new OtherModel(), UUID.randomUUID(), Instant.now());
     }
 
-    @SuppressWarnings("unchecked")
     private static @NotNull WritableRemoteJsonSource.CommitBatchResult buildFailed(@NotNull List<BufferedMutation<? extends JpaModel>> failures) {
-        Collection<BufferedMutation<?>> casted = (Collection<BufferedMutation<?>>) (Collection<?>) failures;
-        return WritableRemoteJsonSource.CommitBatchResult.failed(casted, new RuntimeException("stub failure"));
+        return WritableRemoteJsonSource.CommitBatchResult.failed(failures, new RuntimeException("stub failure"));
     }
 
     /** Marker no-Id model used to drive the mixed-results test case. */

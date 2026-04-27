@@ -2,13 +2,13 @@ package dev.sbs.simplifieddata.persistence;
 
 import com.google.gson.Gson;
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.PutContentRequest;
 import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
 import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.write.WriteMetrics;
+import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.simplified.client.exception.PreconditionFailedException;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
@@ -26,18 +26,13 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Function;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.hasSize;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.notNullValue;
-import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.*;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -106,7 +101,7 @@ class WritableRemoteJsonSourceTest {
 
     @Test
     @DisplayName("upsert of a new entity issues one PUT with the appended JSON and returns success")
-    void upsertNewEntityAppends() throws Exception {
+    void upsertNewEntityAppends() {
         ZodiacEvent existing = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
         WritableRemoteJsonSource<ZodiacEvent> source = newSource(initialFile(List.of(existing)));
 
@@ -127,13 +122,13 @@ class WritableRemoteJsonSourceTest {
 
         ConcurrentList<ZodiacEvent> written = decodeBody(body.getContent());
         assertThat(written, hasSize(2));
-        assertThat(written.get(0).getId(), equalTo("YEAR_OF_THE_SEAL"));
+        assertThat(written.getFirst().getId(), equalTo("YEAR_OF_THE_SEAL"));
         assertThat(written.get(1).getId(), equalTo("YEAR_OF_THE_DOLPHIN"));
     }
 
     @Test
     @DisplayName("upsert of an existing entity replaces it in place")
-    void upsertReplacesExisting() throws Exception {
+    void upsertReplacesExisting() {
         ZodiacEvent a = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
         ZodiacEvent b = event("YEAR_OF_THE_WHALE", "Year of the Whale", 413);
         WritableRemoteJsonSource<ZodiacEvent> source = newSource(initialFile(List.of(a, b)));
@@ -146,15 +141,15 @@ class WritableRemoteJsonSourceTest {
         assertThat(result.isSuccess(), is(true));
         ConcurrentList<ZodiacEvent> written = decodeBody(this.contract.getLastPutBody().getContent());
         assertThat(written, hasSize(2));
-        assertThat(written.get(0).getId(), equalTo("YEAR_OF_THE_SEAL"));
-        assertThat(written.get(0).getName(), equalTo("Year of the Seal (updated)"));
-        assertThat(written.get(0).getReleaseYear(), equalTo(415));
+        assertThat(written.getFirst().getId(), equalTo("YEAR_OF_THE_SEAL"));
+        assertThat(written.getFirst().getName(), equalTo("Year of the Seal (updated)"));
+        assertThat(written.getFirst().getReleaseYear(), equalTo(415));
         assertThat(written.get(1).getId(), equalTo("YEAR_OF_THE_WHALE"));
     }
 
     @Test
     @DisplayName("delete removes the matching entity and PUTs the shortened list")
-    void deleteRemovesEntity() throws Exception {
+    void deleteRemovesEntity() {
         ZodiacEvent a = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
         ZodiacEvent b = event("YEAR_OF_THE_WHALE", "Year of the Whale", 413);
         WritableRemoteJsonSource<ZodiacEvent> source = newSource(initialFile(List.of(a, b)));
@@ -166,12 +161,12 @@ class WritableRemoteJsonSourceTest {
         assertThat(result.isSuccess(), is(true));
         ConcurrentList<ZodiacEvent> written = decodeBody(this.contract.getLastPutBody().getContent());
         assertThat(written, hasSize(1));
-        assertThat(written.get(0).getId(), equalTo("YEAR_OF_THE_WHALE"));
+        assertThat(written.getFirst().getId(), equalTo("YEAR_OF_THE_WHALE"));
     }
 
     @Test
     @DisplayName("412 Precondition Failed retries with a fresh blob SHA up to the configured cap")
-    void preconditionRetry() throws Exception {
+    void preconditionRetry() {
         ZodiacEvent existing = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
         this.contract.queueInitialFile(encodeBody(List.of(existing)), INITIAL_BLOB_SHA);
         this.contract.queueInitialFile(encodeBody(List.of(existing)), NEW_BLOB_SHA);
@@ -193,7 +188,7 @@ class WritableRemoteJsonSourceTest {
 
     @Test
     @DisplayName("Exhausting 412 retries escalates the buffered mutations back to the caller")
-    void preconditionExhaustedEscalates() throws Exception {
+    void preconditionExhaustedEscalates() {
         ZodiacEvent existing = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
         // Queue 4 metadata responses (initial + 3 retries), all PUTs return 412.
         for (int i = 0; i < 4; i++)
@@ -217,7 +212,7 @@ class WritableRemoteJsonSourceTest {
 
     @Test
     @DisplayName("Non-412 SkyBlockDataException from PUT escalates mutations without retrying")
-    void nonPreconditionFailureEscalates() throws Exception {
+    void nonPreconditionFailureEscalates() {
         ZodiacEvent existing = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
         this.contract.queueInitialFile(encodeBody(List.of(existing)), INITIAL_BLOB_SHA);
         this.contract.queuePutBehavior(StubWriteContract.PutOutcome.GENERIC_ERROR);
@@ -234,7 +229,7 @@ class WritableRemoteJsonSourceTest {
 
     @Test
     @DisplayName("load() delegates verbatim to the injected delegate source")
-    void loadDelegates() throws Exception {
+    void loadDelegates() {
         ZodiacEvent event = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
         this.delegate.stubResult = Concurrent.newList(event);
 
@@ -243,7 +238,7 @@ class WritableRemoteJsonSourceTest {
         ConcurrentList<ZodiacEvent> result = source.load(null);
 
         assertThat(result, hasSize(1));
-        assertThat(result.get(0).getId(), equalTo("YEAR_OF_THE_SEAL"));
+        assertThat(result.getFirst().getId(), equalTo("YEAR_OF_THE_SEAL"));
         assertThat(this.delegate.callCount, equalTo(1));
     }
 
@@ -274,7 +269,7 @@ class WritableRemoteJsonSourceTest {
 
     @Test
     @DisplayName("stageBatch on a single-file source produces one file snapshot with appended upsert")
-    void stageBatchSingleFileAppend() throws Exception {
+    void stageBatchSingleFileAppend() {
         ZodiacEvent existing = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
         this.fileFetcher.put(FILE_PATH, GSON.toJson(List.of(existing)));
 
@@ -289,13 +284,13 @@ class WritableRemoteJsonSourceTest {
 
         ConcurrentList<ZodiacEvent> mutatedPrimary = staged.getFileSnapshots().get(FILE_PATH);
         assertThat(mutatedPrimary, hasSize(2));
-        assertThat(mutatedPrimary.get(0).getId(), equalTo("YEAR_OF_THE_SEAL"));
+        assertThat(mutatedPrimary.getFirst().getId(), equalTo("YEAR_OF_THE_SEAL"));
         assertThat(mutatedPrimary.get(1).getId(), equalTo("YEAR_OF_THE_DOLPHIN"));
     }
 
     @Test
     @DisplayName("stageBatch routes an upsert to the extras file when the id currently lives there")
-    void stageBatchRoutesUpsertToExtras() throws Exception {
+    void stageBatchRoutesUpsertToExtras() {
         this.indexProvider.hasExtra = true;
 
         ZodiacEvent inPrimary = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
@@ -315,12 +310,12 @@ class WritableRemoteJsonSourceTest {
 
         ConcurrentList<ZodiacEvent> mutatedExtra = staged.getFileSnapshots().get(this.indexProvider.extraPath);
         assertThat(mutatedExtra, hasSize(1));
-        assertThat(mutatedExtra.get(0).getReleaseYear(), equalTo(499));
+        assertThat(mutatedExtra.getFirst().getReleaseYear(), equalTo(499));
     }
 
     @Test
     @DisplayName("stageBatch routes a new-id upsert to the primary file when extras exists but lacks the id")
-    void stageBatchRoutesNewIdToPrimary() throws Exception {
+    void stageBatchRoutesNewIdToPrimary() {
         this.indexProvider.hasExtra = true;
 
         ZodiacEvent inPrimary = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
@@ -345,7 +340,7 @@ class WritableRemoteJsonSourceTest {
 
     @Test
     @DisplayName("stageBatch routes a delete to whichever file currently owns the id")
-    void stageBatchRoutesDeleteToOwningFile() throws Exception {
+    void stageBatchRoutesDeleteToOwningFile() {
         this.indexProvider.hasExtra = true;
 
         ZodiacEvent inPrimary = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
@@ -367,7 +362,7 @@ class WritableRemoteJsonSourceTest {
 
     @Test
     @DisplayName("stageBatch UPSERT of an id present in BOTH files updates ONLY the extras copy (extras wins)")
-    void stageBatchUpsertConflictKeepsExtrasAuthoritative() throws Exception {
+    void stageBatchUpsertConflictKeepsExtrasAuthoritative() {
         this.indexProvider.hasExtra = true;
 
         // Same id in both files with different state - extras is the correction.
@@ -388,13 +383,13 @@ class WritableRemoteJsonSourceTest {
 
         ConcurrentList<ZodiacEvent> mutatedExtra = staged.getFileSnapshots().get(this.indexProvider.extraPath);
         assertThat(mutatedExtra, hasSize(1));
-        assertThat(mutatedExtra.get(0).getName(), equalTo("Year of the Seal (re-corrected)"));
-        assertThat(mutatedExtra.get(0).getReleaseYear(), equalTo(500));
+        assertThat(mutatedExtra.getFirst().getName(), equalTo("Year of the Seal (re-corrected)"));
+        assertThat(mutatedExtra.getFirst().getReleaseYear(), equalTo(500));
     }
 
     @Test
     @DisplayName("stageBatch DELETE of an id present in BOTH files removes from BOTH files")
-    void stageBatchDeleteConflictRemovesFromBothFiles() throws Exception {
+    void stageBatchDeleteConflictRemovesFromBothFiles() {
         this.indexProvider.hasExtra = true;
 
         ZodiacEvent upstream = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
@@ -416,13 +411,13 @@ class WritableRemoteJsonSourceTest {
         ConcurrentList<ZodiacEvent> mutatedPrimary = staged.getFileSnapshots().get(FILE_PATH);
         ConcurrentList<ZodiacEvent> mutatedExtra = staged.getFileSnapshots().get(this.indexProvider.extraPath);
         assertThat(mutatedPrimary, hasSize(1));
-        assertThat(mutatedPrimary.get(0).getId(), equalTo("YEAR_OF_THE_WHALE"));
+        assertThat(mutatedPrimary.getFirst().getId(), equalTo("YEAR_OF_THE_WHALE"));
         assertThat(mutatedExtra, hasSize(0));
     }
 
     @Test
     @DisplayName("stageBatch produces no dirty files when every upsert is byte-identical to current state")
-    void stageBatchSuppressesNoOp() throws Exception {
+    void stageBatchSuppressesNoOp() {
         ZodiacEvent existing = event("YEAR_OF_THE_SEAL", "Year of the Seal", 414);
         this.fileFetcher.put(FILE_PATH, GSON.toJson(List.of(existing)));
 
@@ -522,8 +517,7 @@ class WritableRemoteJsonSourceTest {
         String json = new String(decoded, StandardCharsets.UTF_8);
         ZodiacEvent[] arr = GSON.fromJson(json, ZodiacEvent[].class);
         ConcurrentList<ZodiacEvent> list = Concurrent.newList();
-        for (ZodiacEvent e : arr)
-            list.add(e);
+        list.addAll(Arrays.asList(arr));
         return list;
     }
 

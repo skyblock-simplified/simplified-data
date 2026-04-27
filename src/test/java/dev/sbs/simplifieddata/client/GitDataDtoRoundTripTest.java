@@ -16,12 +16,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.hasSize;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.notNullValue;
-import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.*;
 
 /**
  * Gson round-trip tests for the Phase 6b dormant Git Data API surface.
@@ -94,7 +89,7 @@ class GitDataDtoRoundTripTest {
         assertThat(commit.getMessage(), containsString("Batch update"));
         assertThat(commit.getTree().getSha(), equalTo("cccccccccccccccccccccccccccccccccccccccc"));
         assertThat(commit.getParents(), hasSize(1));
-        assertThat(commit.getParents().get(0).getSha(), equalTo("dddddddddddddddddddddddddddddddddddddddd"));
+        assertThat(commit.getParents().getFirst().getSha(), equalTo("dddddddddddddddddddddddddddddddddddddddd"));
         assertThat(commit.getAuthor(), notNullValue());
         assertThat(commit.getAuthor().getName(), equalTo("simplified-data-bot"));
         assertThat(commit.getCommitter(), nullValue());
@@ -125,7 +120,7 @@ class GitDataDtoRoundTripTest {
 
         assertThat(tree, notNullValue());
         assertThat(tree.getTree(), hasSize(1));
-        GitTree.Entry entry = tree.getTree().get(0);
+        GitTree.Entry entry = tree.getTree().getFirst();
         assertThat(entry.getPath(), equalTo("data/v1/world/zodiac_events.json"));
         assertThat(entry.getMode(), equalTo("100644"));
         assertThat(entry.getType(), equalTo("blob"));

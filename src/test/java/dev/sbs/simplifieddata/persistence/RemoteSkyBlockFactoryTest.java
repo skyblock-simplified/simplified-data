@@ -2,15 +2,15 @@ package dev.sbs.simplifieddata.persistence;
 
 import com.google.gson.Gson;
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.skyblockdata.SkyBlockFactory;
-import dev.sbs.skyblockdata.model.Accessory;
-import dev.sbs.skyblockdata.model.Item;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.PutContentRequest;
 import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
 import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.write.WriteMetrics;
+import dev.sbs.skyblockdata.SkyBlockFactory;
+import dev.sbs.skyblockdata.model.Accessory;
+import dev.sbs.skyblockdata.model.Item;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.JpaModel;
@@ -27,14 +27,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Path;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.allOf;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.greaterThanOrEqualTo;
-import static org.hamcrest.Matchers.hasKey;
-import static org.hamcrest.Matchers.instanceOf;
-import static org.hamcrest.Matchers.notNullValue;
-import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.*;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -84,6 +77,7 @@ final class RemoteSkyBlockFactoryTest {
     }
 
     @Test
+    @SuppressWarnings("rawtypes")
     void wiresEveryModelWithDiskOverlaySourceWrappingRemoteJsonSource() {
         SkyBlockFactory delegate = new dev.sbs.skyblockdata.SkyBlockFactory();
         RemoteSkyBlockFactory factory = newFactory(delegate);

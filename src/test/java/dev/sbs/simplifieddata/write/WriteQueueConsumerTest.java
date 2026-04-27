@@ -8,7 +8,6 @@ import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.map.IMap;
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.sbs.simplifieddata.client.SkyBlockDataWriteContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.PutContentRequest;
@@ -16,6 +15,7 @@ import dev.sbs.simplifieddata.client.response.GitHubContentEnvelope;
 import dev.sbs.simplifieddata.client.response.GitHubPutResponse;
 import dev.sbs.simplifieddata.persistence.RemoteSkyBlockFactory;
 import dev.sbs.simplifieddata.persistence.WritableRemoteJsonSource;
+import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.JpaModel;
@@ -40,9 +40,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.hasSize;
-import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.*;
 
 /**
  * Integration test for {@link WriteQueueConsumer} driven against a real
@@ -109,7 +107,7 @@ class WriteQueueConsumerTest {
         consumer.stop();
 
         assertThat(this.recordingSource.bufferedMutations, hasSize(1));
-        BufferedMutation<ZodiacEvent> mutation = this.recordingSource.bufferedMutations.get(0);
+        BufferedMutation<ZodiacEvent> mutation = this.recordingSource.bufferedMutations.getFirst();
         assertThat(mutation.getOperation(), equalTo(WriteRequest.Operation.UPSERT));
         assertThat(mutation.getEntity().getId(), equalTo("YEAR_OF_THE_SEAL"));
         assertThat(mutation.getRequestId(), equalTo(request.getRequestId()));
@@ -131,12 +129,12 @@ class WriteQueueConsumerTest {
         consumer.stop();
 
         assertThat(this.recordingSource.bufferedMutations, hasSize(1));
-        assertThat(this.recordingSource.bufferedMutations.get(0).getOperation(), equalTo(WriteRequest.Operation.DELETE));
+        assertThat(this.recordingSource.bufferedMutations.getFirst().getOperation(), equalTo(WriteRequest.Operation.DELETE));
     }
 
     @Test
     @DisplayName("scheduleRetry with attempt beyond cap dead-letters directly to the IMap")
-    void deadLetterPastCap() throws Exception {
+    void deadLetterPastCap() {
         WriteQueueConsumer consumer = newConsumer();
 
         ZodiacEvent event = newEvent("YEAR_OF_THE_DOLPHIN", "Year of the Dolphin", 415);
@@ -175,9 +173,9 @@ class WriteQueueConsumerTest {
         consumer.stop();
 
         assertThat(this.recordingSource.bufferedMutations, hasSize(1));
-        assertThat(this.recordingSource.bufferedMutations.get(0).getRequestId(), equalTo(request.getRequestId()));
+        assertThat(this.recordingSource.bufferedMutations.getFirst().getRequestId(), equalTo(request.getRequestId()));
         // The drained retry should reflect the envelope's attempt counter.
-        assertThat(this.recordingSource.bufferedMutations.get(0).getAttempt(), equalTo(1));
+        assertThat(this.recordingSource.bufferedMutations.getFirst().getAttempt(), equalTo(1));
         // The retry IMap should be empty after the drain consumed the entry.
         assertThat(retryMap.size(), equalTo(0));
     }
@@ -202,8 +200,8 @@ class WriteQueueConsumerTest {
         consumer.stop();
 
         assertThat(this.recordingSource.bufferedMutations, hasSize(1));
-        assertThat(this.recordingSource.bufferedMutations.get(0).getRequestId(), equalTo(request.getRequestId()));
-        assertThat(this.recordingSource.bufferedMutations.get(0).getAttempt(), equalTo(2));
+        assertThat(this.recordingSource.bufferedMutations.getFirst().getRequestId(), equalTo(request.getRequestId()));
+        assertThat(this.recordingSource.bufferedMutations.getFirst().getAttempt(), equalTo(2));
         assertThat(retryMap.size(), equalTo(0));
     }
 
@@ -327,7 +325,7 @@ class WriteQueueConsumerTest {
         }
 
         @Override
-        @SuppressWarnings("unchecked")
+        @SuppressWarnings({ "rawtypes", "unchecked" })
         public void buffer(@NotNull BufferedMutation mutation) throws JpaException {
             this.bufferedMutations.add(mutation);
         }

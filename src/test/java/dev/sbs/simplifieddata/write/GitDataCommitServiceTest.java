@@ -2,7 +2,6 @@ package dev.sbs.simplifieddata.write;
 
 import com.google.gson.Gson;
 import dev.sbs.simplifieddata.DataApi;
-import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.sbs.simplifieddata.client.SkyBlockGitDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.request.CreateBlobRequest;
@@ -13,10 +12,10 @@ import dev.sbs.simplifieddata.client.response.GitBlob;
 import dev.sbs.simplifieddata.client.response.GitCommit;
 import dev.sbs.simplifieddata.client.response.GitRef;
 import dev.sbs.simplifieddata.client.response.GitTree;
+import dev.sbs.skyblockdata.model.ZodiacEvent;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.collection.ConcurrentMap;
-import dev.simplified.persistence.JpaModel;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,10 +30,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.hasSize;
-import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.*;
 
 /**
  * Unit tests for {@link GitDataCommitService} driven against a hand-rolled
@@ -101,17 +97,17 @@ class GitDataCommitServiceTest {
         assertThat(this.contract.getRefCalls.get(), equalTo(1));
         assertThat(this.contract.getCommitCalls.get(), equalTo(1));
         assertThat(this.contract.createBlobCalls, hasSize(1));
-        assertThat(this.contract.createBlobCalls.get(0).getContent(), equalTo("[{\"id\":\"A\"}]"));
-        assertThat(this.contract.createBlobCalls.get(0).getEncoding(), equalTo("utf-8"));
+        assertThat(this.contract.createBlobCalls.getFirst().getContent(), equalTo("[{\"id\":\"A\"}]"));
+        assertThat(this.contract.createBlobCalls.getFirst().getEncoding(), equalTo("utf-8"));
         assertThat(this.contract.createTreeCalls, hasSize(1));
-        assertThat(this.contract.createTreeCalls.get(0).getBaseTree(), equalTo(INITIAL_TREE_SHA));
-        assertThat(this.contract.createTreeCalls.get(0).getTree(), hasSize(1));
+        assertThat(this.contract.createTreeCalls.getFirst().getBaseTree(), equalTo(INITIAL_TREE_SHA));
+        assertThat(this.contract.createTreeCalls.getFirst().getTree(), hasSize(1));
         assertThat(this.contract.createCommitCalls, hasSize(1));
-        assertThat(this.contract.createCommitCalls.get(0).getParents(), hasSize(1));
-        assertThat(this.contract.createCommitCalls.get(0).getParents().get(0), equalTo(INITIAL_COMMIT_SHA));
+        assertThat(this.contract.createCommitCalls.getFirst().getParents(), hasSize(1));
+        assertThat(this.contract.createCommitCalls.getFirst().getParents().getFirst(), equalTo(INITIAL_COMMIT_SHA));
         assertThat(this.contract.updateRefCalls, hasSize(1));
-        assertThat(this.contract.updateRefCalls.get(0).getSha(), equalTo(NEW_COMMIT_SHA));
-        assertThat(this.contract.updateRefCalls.get(0).getForce(), is(false));
+        assertThat(this.contract.updateRefCalls.getFirst().getSha(), equalTo(NEW_COMMIT_SHA));
+        assertThat(this.contract.updateRefCalls.getFirst().getForce(), is(false));
     }
 
     @Test
@@ -130,7 +126,7 @@ class GitDataCommitServiceTest {
         assertThat(result.isSuccess(), is(true));
         assertThat(this.contract.createBlobCalls, hasSize(2));
         assertThat(this.contract.createTreeCalls, hasSize(1));
-        assertThat(this.contract.createTreeCalls.get(0).getTree(), hasSize(2));
+        assertThat(this.contract.createTreeCalls.getFirst().getTree(), hasSize(2));
     }
 
     @Test
@@ -146,7 +142,7 @@ class GitDataCommitServiceTest {
 
         service.commit(request);
 
-        String message = this.contract.createCommitCalls.get(0).getMessage();
+        String message = this.contract.createCommitCalls.getFirst().getMessage();
         assertThat(message, containsString("Batch update: 7 entities across 2 files"));
     }
 
@@ -214,7 +210,6 @@ class GitDataCommitServiceTest {
             .build();
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
     private static @NotNull StagedBatch<ZodiacEvent> newStagedBatch(
         @NotNull String path,
         @NotNull String body,
@@ -237,7 +232,7 @@ class GitDataCommitServiceTest {
     }
 
     /** Hamcrest helper: matcher that accepts an instance of the given class or null. */
-    private static <T> @NotNull org.hamcrest.Matcher<Object> instanceOfOrNull(@NotNull Class<T> type) {
+    private static <T> org.hamcrest.Matcher<Object> instanceOfOrNull(@NotNull Class<T> type) {
         return new org.hamcrest.BaseMatcher<>() {
             @Override
             public boolean matches(Object item) {
@@ -333,7 +328,7 @@ class GitDataCommitServiceTest {
             this.createBlobCalls.add(body);
 
             if (this.blobOutcomeQueued && !this.queuedBlobs.isEmpty()) {
-                BlobOutcome outcome = this.queuedBlobs.remove(0);
+                BlobOutcome outcome = this.queuedBlobs.removeFirst();
                 if (outcome == BlobOutcome.INTERNAL_ERROR)
                     throw fakeException(500, "Internal Server Error");
             }
@@ -379,7 +374,7 @@ class GitDataCommitServiceTest {
             this.updateRefCalls.add(body);
 
             if (!this.queuedUpdateRefs.isEmpty()) {
-                UpdateRefOutcome outcome = this.queuedUpdateRefs.remove(0);
+                UpdateRefOutcome outcome = this.queuedUpdateRefs.removeFirst();
                 if (outcome == UpdateRefOutcome.UNPROCESSABLE)
                     throw fakeException(422, "Update is not a fast forward");
             }

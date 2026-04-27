@@ -2,10 +2,10 @@ package dev.sbs.simplifieddata.persistence;
 
 import dev.sbs.skyblockdata.SkyBlockData;
 import dev.sbs.skyblockdata.model.*;
-import lib.minecraft.text.ChatColor;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.persistence.JpaCacheProvider;
 import dev.simplified.persistence.Repository;
+import lib.minecraft.text.ChatColor;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;

@@ -6,11 +6,11 @@ import dev.sbs.simplifieddata.client.SkyBlockDataContract;
 import dev.sbs.simplifieddata.client.exception.SkyBlockDataException;
 import dev.sbs.simplifieddata.client.response.GitHubCommit;
 import dev.simplified.client.exception.NotModifiedException;
+import dev.simplified.client.request.HttpMethod;
+import dev.simplified.client.request.Request;
 import dev.simplified.client.response.HttpStatus;
 import dev.simplified.client.response.NetworkDetails;
 import dev.simplified.client.response.Response;
-import dev.simplified.client.request.HttpMethod;
-import dev.simplified.client.request.Request;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.collection.ConcurrentMap;
@@ -41,14 +41,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.contains;
-import static org.hamcrest.Matchers.containsInAnyOrder;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.greaterThan;
-import static org.hamcrest.Matchers.hasSize;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.notNullValue;
-import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.*;
 
 /**
  * Integration test for {@link AssetPoller} driving a hand-rolled {@link SkyBlockDataContract}
@@ -77,6 +70,7 @@ import static org.hamcrest.Matchers.nullValue;
  * </ul>
  */
 @Tag("slow")
+@SuppressWarnings("DataFlowIssue")
 class AssetPollerTest {
 
     private static final @NotNull Gson GSON = DataApi.getGson();
@@ -129,7 +123,7 @@ class AssetPollerTest {
             assertThat(state.getContentSha256().orElse(null), is(notNullValue()));
             assertThat(state.getLastSuccessAt().isPresent(), is(true));
 
-            long count = (long) session.createQuery(
+            long count = session.createQuery(
                 "SELECT count(e) FROM ExternalAssetEntryState e WHERE e.sourceId = :sid",
                 Long.class
             ).setParameter("sid", "skyblock-data").getSingleResult();
@@ -244,7 +238,7 @@ class AssetPollerTest {
 
         assertThat(this.refreshTrigger.invocations, hasSize(1));
         assertThat(
-            this.refreshTrigger.invocations.get(0),
+            this.refreshTrigger.invocations.getFirst(),
             contains(dev.sbs.skyblockdata.model.Item.class)
         );
     }
@@ -516,8 +510,7 @@ class AssetPollerTest {
         ConcurrentMap<String, ConcurrentList<String>> wrappedHeaders = Concurrent.newMap();
         headers.forEach((key, values) -> wrappedHeaders.put(key, Concurrent.newList(values)));
 
-        Map<String, Collection<String>> feignHeaders = new HashMap<>();
-        headers.forEach(feignHeaders::put);
+        Map<String, Collection<String>> feignHeaders = new HashMap<>(headers);
         feign.Request feignRequest = feign.Request.create(
             feign.Request.HttpMethod.GET,
             "https://api.github.com/repos/skyblock-simplified/skyblock-data/commits?sha=master",
@@ -644,7 +637,7 @@ class AssetPollerTest {
             if (this.invocations.isEmpty())
                 throw new IllegalStateException("RecordingRefreshTrigger was never invoked");
 
-            return this.invocations.get(this.invocations.size() - 1);
+            return this.invocations.getLast();
         }
 
     }
