@@ -279,7 +279,7 @@ public class AssetPoller {
                 "AssetPoller source='{}' - GitHub call failed (HTTP {}): {} (primaryRateLimit={}, secondaryRateLimit={}, permissions={})",
                 this.sourceId,
                 ex.getStatus().getCode(),
-                ex.getGithubResponse().getReason(),
+                ex.getResponse().getReason(),
                 ex.isPrimaryRateLimit(),
                 ex.isSecondaryRateLimit(),
                 ex.isPermissions()

@@ -123,9 +123,7 @@ public class GitHubConfig {
             .withHeader("Accept", GITHUB_RAW_ACCEPT)
             .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .withDynamicHeader("Authorization", gitHubAuth)
-            .withErrorDecoder((methodKey, response) -> {
-                throw new GitHubApiException(methodKey, response, gson);
-            })
+            .withErrorDecoder(GitHubApiException::new)
             .build();
 
         log.info("Building GitHubContentsContract client against api.github.com (Accept: {})", GITHUB_RAW_ACCEPT);
@@ -147,9 +145,7 @@ public class GitHubConfig {
             .withHeader("Accept", GITHUB_JSON_ACCEPT)
             .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .withDynamicHeader("Authorization", gitHubAuth)
-            .withErrorDecoder((methodKey, response) -> {
-                throw new GitHubApiException(methodKey, response, gson);
-            })
+            .withErrorDecoder(GitHubApiException::new)
             .build();
 
         log.info("Building GitHubContentsWriteContract client against api.github.com (Accept: {})", GITHUB_JSON_ACCEPT);
@@ -211,9 +207,7 @@ public class GitHubConfig {
             .withHeader("Accept", GITHUB_JSON_ACCEPT)
             .withHeader("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .withDynamicHeader("Authorization", gitHubAuth)
-            .withErrorDecoder((methodKey, response) -> {
-                throw new GitHubApiException(methodKey, response, gson);
-            })
+            .withErrorDecoder(GitHubApiException::new)
             .build();
 
         log.info("Building SkyBlockGitDataContract client against api.github.com (Accept: {})", GITHUB_JSON_ACCEPT);

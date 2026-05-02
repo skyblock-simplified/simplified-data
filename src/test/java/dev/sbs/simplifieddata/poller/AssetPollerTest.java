@@ -547,7 +547,7 @@ class AssetPollerTest {
             .headers(Map.of())
             .body("{\"message\":\"" + reason + "\"}", StandardCharsets.UTF_8)
             .build();
-        return new GitHubApiException("getLatestMasterCommit", feignResponse, GSON);
+        return new GitHubApiException(GSON, "getLatestMasterCommit", feignResponse);
     }
 
     private static @NotNull NotModifiedException buildNotModified() {

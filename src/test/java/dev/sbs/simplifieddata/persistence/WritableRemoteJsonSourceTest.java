@@ -682,7 +682,7 @@ class WritableRemoteJsonSourceTest {
                     GitHubPutResponse.class
                 );
                 case PRECONDITION_FAILED -> throw new PreconditionFailedException("PUT /fake", fakeResponse(412, "Precondition Failed"));
-                case GENERIC_ERROR -> throw new GitHubApiException("PUT /fake", fakeResponse(500, "Internal Server Error"), GSON);
+                case GENERIC_ERROR -> throw new GitHubApiException(GSON, "PUT /fake", fakeResponse(500, "Internal Server Error"));
             };
         }
 

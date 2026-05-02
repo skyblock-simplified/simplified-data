@@ -404,7 +404,7 @@ class GitDataCommitServiceTest {
                 .headers(java.util.Map.of())
                 .body("{\"message\":\"" + reason + "\",\"documentation_url\":\"\"}", StandardCharsets.UTF_8)
                 .build();
-            return new GitHubApiException("POST /fake", response, GSON);
+            return new GitHubApiException(GSON, "POST /fake", response);
         }
 
     }
