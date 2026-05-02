@@ -6,14 +6,7 @@ import dev.sbs.skyblockdata.contract.SkyBlockDataContract;
 import api.simplified.github.exception.GitHubApiException;
 import api.simplified.github.response.GitHubCommit;
 import dev.simplified.client.exception.NotModifiedException;
-import dev.simplified.client.request.HttpMethod;
-import dev.simplified.client.request.Request;
-import dev.simplified.client.response.HttpStatus;
-import dev.simplified.client.response.NetworkDetails;
 import dev.simplified.client.response.Response;
-import dev.simplified.collection.Concurrent;
-import dev.simplified.collection.ConcurrentList;
-import dev.simplified.collection.ConcurrentMap;
 import dev.simplified.persistence.JpaConfig;
 import dev.simplified.persistence.JpaModel;
 import dev.simplified.persistence.JpaSession;
@@ -506,10 +499,7 @@ class AssetPollerTest {
         return GSON.fromJson(json, GitHubCommit.class);
     }
 
-    private static @NotNull Response<?> response(int status, @NotNull Map<String, List<String>> headers, @NotNull Object body) {
-        ConcurrentMap<String, ConcurrentList<String>> wrappedHeaders = Concurrent.newMap();
-        headers.forEach((key, values) -> wrappedHeaders.put(key, Concurrent.newList(values)));
-
+    private static <T> @NotNull Response<T> response(int status, @NotNull Map<String, List<String>> headers, @NotNull T body) {
         Map<String, Collection<String>> feignHeaders = new HashMap<>(headers);
         feign.Request feignRequest = feign.Request.create(
             feign.Request.HttpMethod.GET,
@@ -526,10 +516,7 @@ class AssetPollerTest {
             .body("", StandardCharsets.UTF_8)
             .build();
 
-        NetworkDetails details = new NetworkDetails(feignResponse);
-        Request request = new Request.Impl(HttpMethod.GET, feignRequest.url());
-        HttpStatus httpStatus = HttpStatus.of(status);
-        return new Response.Impl<>(body, details, httpStatus, request, wrappedHeaders);
+        return new Response.Impl<>(feignResponse, () -> body);
     }
 
     private static @NotNull GitHubApiException buildFailure(int status, @NotNull String reason) {
